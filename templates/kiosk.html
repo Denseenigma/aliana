@@ -10,16 +10,31 @@
   The full detail lives on the browser dashboard at "/".
 -->
 <style>
+  /*
+    SCREEN SAFE AREA -- the panel hides a few pixels behind its bezel.
+    If anything is still cut off (or there's a gap), adjust these.
+  */
   :root {
-    --bg: #0d1117;
-    --panel: #151b23;
-    --border: #2a323d;
-    --text: #d8dee9;
-    --muted: #7b8798;
-    --accent: #3fb950;
-    --accent-dim: #2a7a3a;
-    --warn: #e3b341;
-    --danger: #f85149;
+    --inset-top: 0px;
+    --inset-right: 20px;
+    --inset-bottom: 6px;
+    --inset-left: 0px;
+  }
+
+  /* Theme: NERV-terminal inspired -- orange line work on black */
+  :root {
+    --bg: #000;
+    --panel: #0b0603;
+    --line: #ff7a00;
+    --line-dim: #6b3200;
+    --text: #ffd9b0;
+    --muted: #b06a2c;
+    --orange: #ff7a00;
+    --green: #50ff50;
+    --red: #ff2626;
+    --title: "Times New Roman", "Liberation Serif", "DejaVu Serif", serif;
+    --cond: "DejaVu Sans Condensed", "Liberation Sans Narrow", "Arial Narrow", sans-serif;
+    --mono: "DejaVu Sans Mono", ui-monospace, Consolas, monospace;
   }
   * { box-sizing: border-box; }
   html, body {
@@ -28,22 +43,26 @@
     overflow: hidden;
     background: var(--bg);
     color: var(--text);
-    font-family: ui-monospace, "SF Mono", "Cascadia Code", Consolas, monospace;
+    font-family: var(--cond);
+    text-transform: uppercase;
     user-select: none;
     -webkit-tap-highlight-color: transparent;
   }
   body {
     display: flex;
     flex-direction: column;
-    gap: 6px;
-    padding: 6px 8px 8px;
+    gap: 5px;
+    padding: calc(5px + var(--inset-top)) calc(6px + var(--inset-right))
+             calc(6px + var(--inset-bottom)) calc(6px + var(--inset-left));
+    /* faint hex grid */
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='28' height='48' viewBox='0 0 28 48'%3E%3Cpath d='M14 0 L28 8 L28 24 L14 32 L0 24 L0 8 Z M14 32 L14 48' fill='none' stroke='%23ff7a00' stroke-opacity='0.07'/%3E%3C/svg%3E");
   }
 
-  /* Header: name, interface, clock */
+  /* Header: emblem block, hazard stripe, interface, clock */
   header {
     display: flex;
-    align-items: center;
-    gap: 8px;
+    align-items: stretch;
+    gap: 6px;
     height: 24px;
     font-size: 12px;
     color: var(--muted);
@@ -51,159 +70,214 @@
   .brand {
     display: flex;
     align-items: center;
-    gap: 5px;
-    color: var(--accent);
+    gap: 4px;
+    padding: 0 12px 0 6px;
+    background: var(--orange);
+    color: #000;
+    font-family: var(--title);
     font-weight: bold;
-    font-size: 14px;
-    letter-spacing: 0.06em;
+    font-size: 17px;
+    letter-spacing: 0.04em;
+    clip-path: polygon(0 0, 100% 0, calc(100% - 8px) 100%, 0 100%);
   }
-  .brand svg { width: 22px; height: 18px; }
-  .iface { flex: 1; text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .iface b { color: var(--text); font-weight: normal; }
+  .brand svg { width: 20px; height: 16px; }
+  .hazard {
+    width: 34px;
+    background: repeating-linear-gradient(-45deg, var(--orange) 0 5px, #000 5px 10px);
+    opacity: 0.85;
+  }
+  .iface {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    white-space: nowrap;
+    overflow: hidden;
+    border-top: 1px solid var(--line-dim);
+    border-bottom: 1px solid var(--line-dim);
+    font-family: var(--mono);
+    font-size: 11px;
+  }
+  .iface b { color: var(--text); font-weight: normal; margin-right: 6px; }
+  #clock {
+    display: flex;
+    align-items: center;
+    font-family: var(--mono);
+    color: var(--orange);
+    font-size: 13px;
+  }
   .dot {
     display: inline-block;
-    width: 8px; height: 8px;
-    border-radius: 50%;
+    width: 7px; height: 7px;
     background: var(--muted);
-    margin-right: 4px;
-    vertical-align: 0;
+    margin-right: 5px;
   }
-  .dot.up { background: var(--accent); }
+  .dot.up { background: var(--green); box-shadow: 0 0 5px var(--green); }
 
-  /* Status band: phase + progress bar */
+  /* Status band */
   .status {
+    position: relative;
+    border: 1px solid var(--line);
     background: var(--panel);
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    padding: 7px 10px 8px;
+    padding: 4px 10px 7px 16px;
   }
+  .status::before {
+    content: "";
+    position: absolute;
+    left: 0; top: 0; bottom: 0;
+    width: 6px;
+    background: repeating-linear-gradient(-45deg, var(--line-dim) 0 3px, #000 3px 6px);
+  }
+  .status.alert { border-color: var(--red); }
+  .status.alert::before { background: repeating-linear-gradient(-45deg, var(--red) 0 3px, #000 3px 6px); }
   .status-line {
     display: flex;
     justify-content: space-between;
     align-items: baseline;
-    font-size: 13px;
-    margin-bottom: 6px;
+    margin-bottom: 4px;
     white-space: nowrap;
   }
-  .phase { color: var(--text); overflow: hidden; text-overflow: ellipsis; }
-  .phase.scanning { color: var(--accent); }
-  .phase.scanning::before { content: "\25CF  "; animation: blink 1s steps(1) infinite; }
-  .phase.error { color: var(--danger); }
-  .status-right { color: var(--muted); margin-left: 8px; }
+  .phase {
+    font-family: var(--title);
+    font-weight: bold;
+    font-size: 17px;
+    letter-spacing: 0.05em;
+    color: var(--orange);
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .phase.scanning { color: var(--red); text-shadow: 0 0 6px rgba(255, 38, 38, 0.6); }
+  .phase.scanning::before { content: "\25A0  "; animation: blink 0.8s steps(1) infinite; }
+  .phase.error { color: var(--red); }
+  .status-right { color: var(--muted); margin-left: 8px; font-family: var(--mono); font-size: 12px; }
   @keyframes blink { 50% { opacity: 0; } }
   .bar {
     height: 8px;
-    background: var(--bg);
-    border-radius: 4px;
+    border: 1px solid var(--line-dim);
     overflow: hidden;
+    background: repeating-linear-gradient(90deg, transparent 0 calc(10% - 1px), var(--line-dim) calc(10% - 1px) 10%);
   }
   .bar-fill {
     height: 100%;
     width: 0;
-    background: var(--accent);
-    border-radius: 4px;
+    background: var(--orange);
     transition: width 0.6s ease;
   }
-  .bar-fill.idle { background: var(--accent-dim); }
-  /* Unknown % (e.g. between phases): sweeping stripe */
+  .status.alert .bar-fill { background: var(--red); box-shadow: 0 0 6px var(--red); }
+  .bar-fill.idle { background: var(--line-dim); }
   .bar-fill.indeterminate {
     width: 30% !important;
     animation: sweep 1.4s ease-in-out infinite;
   }
   @keyframes sweep { 0% { transform: translateX(-100%); } 100% { transform: translateX(340%); } }
 
-  /* Headline numbers */
+  /* Headline numbers -- cut-corner frames with orange label tabs */
   .tiles {
     display: grid;
     grid-template-columns: repeat(3, 1fr);
-    gap: 6px;
+    gap: 5px;
   }
   .tile {
+    background: var(--line);
+    padding: 1px;
+    clip-path: polygon(0 0, calc(100% - 10px) 0, 100% 10px, 100% 100%, 0 100%);
+  }
+  .tile-inner {
     background: var(--panel);
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    padding: 5px 8px 6px;
-    text-align: center;
+    height: 100%;
+    clip-path: polygon(0 0, calc(100% - 9px) 0, 100% 9px, 100% 100%, 0 100%);
+    display: flex;
+    flex-direction: column;
+  }
+  .tile .label {
+    background: var(--orange);
+    color: #000;
+    font-size: 10px;
+    font-weight: bold;
+    letter-spacing: 0.1em;
+    padding: 1px 6px;
+    align-self: flex-start;
   }
   .tile .num {
-    font-size: 30px;
-    line-height: 34px;
+    font-size: 32px;
+    line-height: 38px;
     font-weight: bold;
     color: var(--text);
+    text-align: right;
+    padding: 0 8px;
     white-space: nowrap;
   }
-  .tile .num.small { font-size: 20px; }
-  .tile .label {
-    font-size: 10px;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-    color: var(--muted);
-  }
-  .tile.live .num { color: var(--accent); }
+  .tile .num.small { font-size: 22px; }
+  .tile.live .num { color: var(--green); text-shadow: 0 0 8px rgba(80, 255, 80, 0.5); }
 
-  /* Live feed / top services -- takes whatever height is left */
+  /* Feed */
   .feed {
     flex: 1;
     min-height: 0;
     overflow: hidden;
-    background: var(--panel);
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    padding: 5px 10px;
+    border: 1px solid var(--line-dim);
+    border-left: 3px solid var(--line);
+    background: rgba(11, 6, 3, 0.85);
+    padding: 3px 8px;
+    font-family: var(--mono);
     font-size: 12px;
-    line-height: 17px;
+    line-height: 16px;
   }
   .feed-title {
+    font-family: var(--cond);
     font-size: 10px;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-    color: var(--muted);
+    letter-spacing: 0.12em;
+    color: var(--orange);
     margin-bottom: 2px;
   }
   .feed-row { display: flex; justify-content: space-between; white-space: nowrap; }
   .feed-row .ip { color: var(--text); }
-  .feed-row .port { color: var(--accent); }
+  .feed-row .port { color: var(--green); }
   .feed-row.new { animation: flash 1.2s ease-out; }
-  @keyframes flash { from { background: var(--accent-dim); } to { background: transparent; } }
+  @keyframes flash { from { background: rgba(255, 122, 0, 0.45); } to { background: transparent; } }
   .chips { display: flex; flex-wrap: wrap; gap: 4px 6px; }
   .chip {
-    border: 1px solid var(--border);
-    border-radius: 4px;
+    border: 1px solid var(--line-dim);
     padding: 0 6px;
     color: var(--text);
   }
-  .chip span { color: var(--accent); margin-left: 4px; }
+  .chip span { color: var(--green); margin-left: 5px; }
   .feed .muted { color: var(--muted); }
-  .feed .error { color: var(--danger); }
+  .feed .error { color: var(--red); text-transform: none; }
 
-  /* Controls -- finger-sized */
+  /* Controls */
   .controls {
     display: grid;
     grid-template-columns: 3fr 2fr;
-    gap: 6px;
+    gap: 5px;
   }
   button {
-    height: 46px;
-    border: 1px solid var(--accent-dim);
-    border-radius: 6px;
-    background: var(--accent-dim);
-    color: #fff;
-    font-family: inherit;
-    font-size: 15px;
+    height: 44px;
+    border: none;
+    background: var(--orange);
+    color: #000;
+    font-family: var(--title);
+    font-size: 19px;
     font-weight: bold;
-    letter-spacing: 0.06em;
+    letter-spacing: 0.08em;
     touch-action: manipulation;
+    clip-path: polygon(0 0, 100% 0, 100% calc(100% - 12px), calc(100% - 12px) 100%, 0 100%);
   }
   button.secondary {
-    background: var(--panel);
-    border-color: var(--border);
-    color: var(--text);
-    font-size: 13px;
-    font-weight: normal;
+    background: transparent;
+    color: var(--orange);
+    font-family: var(--cond);
+    font-size: 14px;
+    letter-spacing: 0.1em;
+    box-shadow: inset 0 0 0 1px var(--line);
+    clip-path: none;
   }
-  button:active { background: var(--accent); }
-  button.secondary:active { background: var(--border); }
-  button:disabled { opacity: 0.45; }
+  button:active { background: #fff; }
+  button.secondary:active { background: var(--line-dim); }
+  button:disabled { background: var(--line-dim); color: var(--orange); opacity: 0.8; }
+  button.secondary:disabled { background: transparent; color: var(--line-dim); box-shadow: inset 0 0 0 1px var(--line-dim); }
+  #scan-btn.busy { background: var(--red); color: #000; opacity: 1; animation: pulse 1.6s ease-in-out infinite; }
+  @keyframes pulse { 50% { opacity: 0.6; } }
 </style>
 </head>
 <body>
@@ -220,11 +294,12 @@
     </svg>
     ALIANA
   </div>
+  <div class="hazard"></div>
   <div class="iface"><span class="dot" id="iface-dot"></span><b id="iface-name">&mdash;</b> <span id="iface-ip"></span></div>
   <div id="clock">--:--</div>
 </header>
 
-<section class="status">
+<section class="status" id="status">
   <div class="status-line">
     <span class="phase" id="phase">Connecting&hellip;</span>
     <span class="status-right" id="status-right"></span>
@@ -233,9 +308,9 @@
 </section>
 
 <section class="tiles">
-  <div class="tile" id="tile-hosts"><div class="num" id="hosts">&ndash;</div><div class="label">Hosts up</div></div>
-  <div class="tile" id="tile-ports"><div class="num" id="ports">&ndash;</div><div class="label">Open ports</div></div>
-  <div class="tile"><div class="num small" id="third">&ndash;</div><div class="label" id="third-label">Last scan</div></div>
+  <div class="tile" id="tile-hosts"><div class="tile-inner"><div class="label">Hosts up</div><div class="num" id="hosts">&ndash;</div></div></div>
+  <div class="tile" id="tile-ports"><div class="tile-inner"><div class="label">Open ports</div><div class="num" id="ports">&ndash;</div></div></div>
+  <div class="tile"><div class="tile-inner"><div class="label" id="third-label">Last scan</div><div class="num small" id="third">&ndash;</div></div></div>
 </section>
 
 <section class="feed" id="feed"><div class="muted">Waiting for data&hellip;</div></section>
@@ -329,8 +404,9 @@
       $("hosts").textContent = latest ? latest.hosts : "–";
       $("ports").textContent = latest ? latest.open_ports : "–";
       $("third").textContent = latest ? ago(latest.ago) : "–";
-      $("third-label").textContent = latest && latest.ago >= 60 ? "Last scan ago" : "Last scan";
+      $("third-label").textContent = latest && latest.ago >= 60 ? "Last scan" : "Last scan";
     }
+    $("status").className = "status" + (s.running || s.error ? " alert" : "");
     $("tile-hosts").className = "tile" + (s.running ? " live" : "");
     $("tile-ports").className = "tile" + (s.running ? " live" : "");
 
@@ -368,6 +444,7 @@
     // Controls
     $("scan-btn").disabled = s.running;
     $("scan-btn").textContent = s.running ? "SCANNING…" : "SCAN NOW";
+    $("scan-btn").className = s.running ? "busy" : "";
     $("iface-btn").disabled = s.running || s.interfaces.length < 2;
   }
 

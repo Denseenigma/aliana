@@ -6,15 +6,19 @@
 <title>Aliana Recon</title>
 <style>
   :root {
-    --bg: #0d1117;
-    --panel: #151b23;
-    --border: #2a323d;
-    --text: #d8dee9;
-    --muted: #7b8798;
-    --accent: #3fb950;
-    --accent-dim: #2a7a3a;
-    --warn: #e3b341;
-    --danger: #f85149;
+    /* Theme: NERV-terminal inspired -- orange line work on black
+       (matches the onboard screen, templates/kiosk.html) */
+    --bg: #000;
+    --panel: #0b0603;
+    --border: #6b3200;
+    --text: #ffd9b0;
+    --muted: #b06a2c;
+    --accent: #ff7a00;
+    --accent-dim: #c25a00;
+    --warn: #ff2626;
+    --danger: #ff2626;
+    --green: #50ff50;
+    --title: "Times New Roman", "Liberation Serif", "DejaVu Serif", serif;
   }
   * { box-sizing: border-box; }
   body {
@@ -148,6 +152,85 @@
     margin-bottom: 16px;
     font-size: 0.85rem;
   }
+
+  /* ---- Theme overrides ---- */
+  body {
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='28' height='48' viewBox='0 0 28 48'%3E%3Cpath d='M14 0 L28 8 L28 24 L14 32 L0 24 L0 8 Z M14 32 L14 48' fill='none' stroke='%23ff7a00' stroke-opacity='0.06'/%3E%3C/svg%3E");
+  }
+  header {
+    border-bottom: none;
+    position: relative;
+    padding-bottom: 20px;
+  }
+  header::after {
+    content: "";
+    position: absolute;
+    left: 0; right: 0; bottom: 0;
+    height: 8px;
+    background: repeating-linear-gradient(-45deg, var(--accent) 0 8px, #000 8px 16px);
+    opacity: 0.8;
+  }
+  h1 {
+    background: var(--accent);
+    color: #000;
+    font-family: var(--title);
+    font-size: 1.7rem;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    padding: 2px 26px 2px 10px;
+    clip-path: polygon(0 0, 100% 0, calc(100% - 14px) 100%, 0 100%);
+  }
+  h1 span {
+    color: #000;
+    opacity: 0.7;
+    font-family: inherit;
+    font-size: 0.95rem;
+    letter-spacing: 0.15em;
+  }
+  .status-bar { text-transform: uppercase; letter-spacing: 0.04em; }
+  .dot { border-radius: 0; }
+  .dot.idle { background: var(--green); box-shadow: 0 0 5px var(--green); }
+  .dot.running { box-shadow: 0 0 6px var(--warn); animation: blink 0.8s steps(1) infinite; }
+  @keyframes blink { 50% { opacity: 0; } }
+  button {
+    background: var(--accent);
+    color: #000;
+    border-radius: 0;
+    font-family: var(--title);
+    font-weight: bold;
+    font-size: 1rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    padding: 8px 22px 8px 16px;
+    clip-path: polygon(0 0, 100% 0, 100% calc(100% - 10px), calc(100% - 10px) 100%, 0 100%);
+  }
+  button:hover { background: #ffa040; }
+  button:disabled { background: var(--border); color: var(--accent); cursor: default; }
+  select { border-radius: 0; border-color: var(--accent); color: var(--accent); background: #000; }
+  .panel {
+    border-radius: 0;
+    border-color: var(--border);
+    border-left: 3px solid var(--accent);
+    clip-path: polygon(0 0, calc(100% - 16px) 0, 100% 16px, 100% 100%, 0 100%);
+  }
+  .panel h2 {
+    display: inline-block;
+    background: var(--accent);
+    color: #000;
+    font-size: 0.8rem;
+    letter-spacing: 0.12em;
+    padding: 2px 10px;
+  }
+  .host-card {
+    border-radius: 0;
+    background: #000;
+    border-color: var(--border);
+  }
+  .host-card .ip { color: var(--accent); }
+  th { color: var(--accent); text-transform: uppercase; font-size: 0.75rem; letter-spacing: 0.08em; }
+  .state-open { color: var(--green); }
+  .history-row { border-bottom-color: var(--border); }
+  .error-banner { border-radius: 0; background: #1a0000; }
 </style>
 </head>
 <body>

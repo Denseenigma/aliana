@@ -201,6 +201,11 @@ def init_db():
             value TEXT
         )
     """)
+    # Clean up "down" hosts stored by earlier builds (nmap -v lists every
+    # unresponsive address) and fix those scans' host counts.
+    c.execute("DELETE FROM ports WHERE host_id IN (SELECT id FROM hosts WHERE status = 'down')")
+    c.execute("DELETE FROM hosts WHERE status = 'down'")
+    c.execute("UPDATE scans SET host_count = (SELECT COUNT(*) FROM hosts WHERE hosts.scan_id = scans.id)")
     conn.commit()
     conn.close()
 
@@ -385,7 +390,9 @@ def _parse_nmap_xml(path):
                     "version": service_el.get("version") if service_el is not None else "",
                 })
 
-        if addr_ipv4:
+        # With -v, nmap also lists every address that did NOT respond
+        # (status "down") -- skip those, we only want live hosts.
+        if addr_ipv4 and status == "up":
             hosts.append({
                 "ip": addr_ipv4,
                 "mac": mac,
