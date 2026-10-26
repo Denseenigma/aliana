@@ -17,17 +17,33 @@
     --danger: #f85149;
   }
   * { box-sizing: border-box; }
-  /* Always-visible, finger-sized scroll bar for the onboard touchscreen */
-  html { overflow-y: scroll; }
-  ::-webkit-scrollbar { width: 18px; }
-  ::-webkit-scrollbar-track { background: var(--panel); border-left: 1px solid var(--border); }
-  ::-webkit-scrollbar-thumb {
-    background: var(--accent-dim);
-    border: 3px solid var(--panel);
-    border-radius: 9px;
-    min-height: 40px;
+  /* Finger-sized scroll bar for the onboard touchscreen. Drawn by the page
+     itself (see #aliana-rail script at the bottom) because kiosk Chromium
+     hides/ignores native scroll bar styling on the touchscreen. */
+  html { scrollbar-width: none; }
+  html body { padding-right: 40px; }
+  #aliana-rail {
+    position: fixed;
+    top: 0;
+    right: 0;
+    width: 24px;
+    height: 100vh;
+    background: var(--panel);
+    border-left: 1px solid var(--border);
+    z-index: 1000;
+    touch-action: none;
+    user-select: none;
   }
-  ::-webkit-scrollbar-thumb:active { background: var(--accent); }
+  #aliana-thumb {
+    position: absolute;
+    top: 0;
+    left: 4px;
+    right: 4px;
+    min-height: 40px;
+    background: var(--accent-dim);
+    border-radius: 8px;
+  }
+  #aliana-rail.dragging #aliana-thumb { background: var(--accent); }
   body {
     background: var(--bg);
     color: var(--text);
@@ -266,6 +282,70 @@
     </div>
   </div>
 </div>
+
+<div id="aliana-rail" aria-hidden="true"><div id="aliana-thumb"></div></div>
+<script>
+// Custom scroll bar: drag the thumb, or tap anywhere on the rail to jump there.
+(function () {
+  var rail = document.getElementById("aliana-rail");
+  var thumb = document.getElementById("aliana-thumb");
+  var doc = document.scrollingElement || document.documentElement;
+  var drag = null;
+
+  function metrics() {
+    var railH = rail.clientHeight;
+    var contentH = doc.scrollHeight;
+    var viewH = window.innerHeight;
+    var thumbH = Math.max(40, railH * Math.min(1, viewH / contentH));
+    return {
+      thumbH: thumbH,
+      maxScroll: Math.max(0, contentH - viewH),
+      maxTop: Math.max(0, railH - thumbH)
+    };
+  }
+
+  function thumbTop(m) {
+    return m.maxScroll ? (doc.scrollTop / m.maxScroll) * m.maxTop : 0;
+  }
+
+  function update() {
+    var m = metrics();
+    thumb.style.height = m.thumbH + "px";
+    thumb.style.transform = "translateY(" + thumbTop(m) + "px)";
+  }
+
+  function move(e) {
+    if (!drag) return;
+    var m = metrics();
+    var y = e.clientY - rail.getBoundingClientRect().top - drag.offset;
+    var top = Math.min(m.maxTop, Math.max(0, y));
+    doc.scrollTop = m.maxTop ? (top / m.maxTop) * m.maxScroll : 0;
+  }
+
+  function end() {
+    drag = null;
+    rail.classList.remove("dragging");
+  }
+
+  rail.addEventListener("pointerdown", function (e) {
+    e.preventDefault();
+    rail.setPointerCapture(e.pointerId);
+    var m = metrics();
+    var y = e.clientY - rail.getBoundingClientRect().top;
+    var onThumb = e.target === thumb;
+    drag = { offset: onThumb ? y - thumbTop(m) : m.thumbH / 2 };
+    rail.classList.add("dragging");
+    move(e);
+  });
+  rail.addEventListener("pointermove", move);
+  rail.addEventListener("pointerup", end);
+  rail.addEventListener("pointercancel", end);
+  window.addEventListener("scroll", update, { passive: true });
+  window.addEventListener("resize", update);
+  if (window.ResizeObserver) new ResizeObserver(update).observe(document.body);
+  update();
+})();
+</script>
 
 </body>
 </html>
