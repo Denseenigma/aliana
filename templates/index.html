@@ -22,26 +22,48 @@
      hides/ignores native scroll bar styling on the touchscreen. */
   html { scrollbar-width: none; }
   html body { padding-right: 40px; }
+  /* The touch area is wider (64px) than the visible 24px strip, because
+     resistive touch panels are least accurate right at the screen edge. */
   #aliana-rail {
     position: fixed;
     top: 0;
     right: 0;
-    width: 24px;
+    width: 64px;
     height: 100vh;
-    background: var(--panel);
-    border-left: 1px solid var(--border);
     z-index: 1000;
     touch-action: none;
     user-select: none;
   }
+  #aliana-rail::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    right: 0;
+    width: 24px;
+    background: var(--panel);
+    border-left: 1px solid var(--border);
+  }
   #aliana-thumb {
     position: absolute;
     top: 0;
-    left: 4px;
     right: 4px;
+    width: 16px;
     min-height: 40px;
     background: var(--accent-dim);
     border-radius: 8px;
+    pointer-events: none;
+  }
+  #aliana-debug {
+    position: fixed;
+    left: 4px;
+    bottom: 4px;
+    z-index: 1001;
+    background: #000;
+    color: var(--warn);
+    font-size: 11px;
+    padding: 2px 6px;
+    pointer-events: none;
   }
   #aliana-rail.dragging #aliana-thumb { background: var(--accent); }
   body {
@@ -332,8 +354,9 @@
     rail.setPointerCapture(e.pointerId);
     var m = metrics();
     var y = e.clientY - rail.getBoundingClientRect().top;
-    var onThumb = e.target === thumb;
-    drag = { offset: onThumb ? y - thumbTop(m) : m.thumbH / 2 };
+    var t = thumbTop(m);
+    var onThumb = y >= t && y <= t + m.thumbH;
+    drag = { offset: onThumb ? y - t : m.thumbH / 2 };
     rail.classList.add("dragging");
     move(e);
   });
@@ -344,6 +367,24 @@
   window.addEventListener("resize", update);
   if (window.ResizeObserver) new ResizeObserver(update).observe(document.body);
   update();
+
+  // Touch debug: open the dashboard with ?touchdebug to show where each
+  // touch lands and which events the browser fires.
+  if (/[?&]touchdebug/.test(location.search)) {
+    var box = document.createElement("div");
+    box.id = "aliana-debug";
+    box.textContent = "touchdebug: tap anywhere";
+    document.body.appendChild(box);
+    ["pointerdown", "pointermove", "touchstart", "mousedown"].forEach(function (type) {
+      window.addEventListener(type, function (e) {
+        var p = e.touches && e.touches[0] ? e.touches[0] : e;
+        box.textContent = type + (e.pointerType ? "/" + e.pointerType : "") +
+          " x=" + Math.round(p.clientX) + " y=" + Math.round(p.clientY) +
+          " (screen " + window.innerWidth + "x" + window.innerHeight + ")" +
+          (rail.contains(e.target) ? " ON RAIL" : "");
+      }, { capture: true, passive: true });
+    });
+  }
 })();
 </script>
 
