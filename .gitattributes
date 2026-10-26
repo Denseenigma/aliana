@@ -1,0 +1,2 @@
+# Keep LF line endings in the repo so scripts run on the Pi
+* text=auto eol=lf

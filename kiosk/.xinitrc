@@ -32,6 +32,7 @@ exec chromium-browser \
     --disable-infobars \
     --disable-session-crashed-bubble \
     --disable-translate \
+    --disable-features=OverlayScrollbar \
     --no-first-run \
     --check-for-update-interval=31536000 \
     --window-size=480,320 \

@@ -36,6 +36,20 @@ else
     echo "    autostart block already present, skipped"
 fi
 
+echo "==> Installing touchscreen Y-axis fix (X11 input config)..."
+# The SunFounder/piscreen touch panel reports Y inverted at rotate=270.
+# Flip it in the X input layer (works with both libinput and evdev) rather
+# than in the display overlay, which can break the LCD driver.
+sudo mkdir -p /etc/X11/xorg.conf.d
+sudo tee /etc/X11/xorg.conf.d/99-touch-flip.conf > /dev/null <<'EOF'
+Section "InputClass"
+    Identifier "Touch Y flip"
+    MatchIsTouchscreen "on"
+    Option "CalibrationMatrix" "1 0 0 0 -1 1"
+    Option "InvertY" "true"
+EndSection
+EOF
+
 echo "==> Installing/updating systemd service..."
 sudo cp "$REPO_DIR/aliana.service" /etc/systemd/system/aliana.service
 sudo systemctl daemon-reload
