@@ -15,7 +15,8 @@ aliana/
   aliana.service       systemd unit (expects the repo cloned at ~/aliana)
   setup.sh             one-time/after-pull install steps (Pi only)
   templates/
-    index.html          dashboard page
+    index.html          full dashboard (browser)
+    kiosk.html          compact control screen for the 480x320 display
   kiosk/
     .xinitrc             launches Chromium in kiosk mode on boot
     bash_profile_snippet.sh   autostarts X on the console login
@@ -111,7 +112,11 @@ used only before anything's been selected in the UI:
 
 If a screen is attached and you want Aliana to boot straight into it in
 kiosk mode, `setup.sh` already wires this up. Chromium opens straight to
-the dashboard once Aliana's Flask server is answering.
+`/kiosk` once Aliana's Flask server is answering: a single, no-scroll
+screen showing the scan in progress live (phase, % done, hosts up, open
+ports as they're found), a summary of the last scan when idle, and two
+buttons -- Scan now, and cycle the scan interface. The full detail stays
+on the browser dashboard at `/`.
 
 ## Notes
 

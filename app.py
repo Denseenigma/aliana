@@ -4,6 +4,7 @@ Runs nmap scans against a subnet (by default, whatever's on usb0) and
 shows the results in a web UI, with history.
 """
 import threading
+import time
 from flask import Flask, render_template, jsonify, redirect, url_for
 
 import scanner
@@ -36,6 +37,57 @@ def set_interface():
     if name:
         scanner.set_current_interface(name)
     return redirect(url_for("index"))
+
+
+@app.route("/kiosk")
+def kiosk():
+    """Condensed 480x320 control screen for the Pi's onboard display."""
+    return render_template("kiosk.html")
+
+
+def _kiosk_state():
+    status = scanner.get_status()
+    interfaces = scanner.list_interfaces()
+    current = status["interface"]
+    iface_ip = next((i["ipv4"] for i in interfaces if i["name"] == current), None)
+    next_in = None
+    if status.get("next_run") and not status["running"]:
+        next_in = max(0, int(status["next_run"] - time.time()))
+    return {
+        "running": status["running"],
+        "error": status["last_error"],
+        "interface": current,
+        "interface_ip": iface_ip,
+        "interfaces": [i["name"] for i in interfaces],
+        "next_in": next_in,
+        "interval": scanner.SCAN_INTERVAL_SECONDS,
+        "progress": scanner.get_progress(),
+        "latest": scanner.get_latest_summary(),
+    }
+
+
+@app.route("/api/kiosk")
+def api_kiosk():
+    return jsonify(_kiosk_state())
+
+
+@app.route("/api/scan", methods=["POST"])
+def api_scan():
+    if not scanner.get_status()["running"]:
+        threading.Thread(target=scanner.run_scan, daemon=True).start()
+        time.sleep(0.2)  # let the scan flag flip so the response reflects it
+    return jsonify(_kiosk_state())
+
+
+@app.route("/api/interface/next", methods=["POST"])
+def api_interface_next():
+    """Cycles the scan interface to the next one (kiosk button)."""
+    names = [i["name"] for i in scanner.list_interfaces()]
+    if names:
+        current = scanner.get_current_interface()
+        idx = names.index(current) if current in names else -1
+        scanner.set_current_interface(names[(idx + 1) % len(names)])
+    return jsonify(_kiosk_state())
 
 
 @app.route("/api/interfaces")

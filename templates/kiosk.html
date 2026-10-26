@@ -1,0 +1,430 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Aliana</title>
+<!--
+  Onboard-screen view (480x320 touchscreen). Fits on one screen with no
+  scrolling: live scan progress, headline numbers, and the two controls.
+  The full detail lives on the browser dashboard at "/".
+-->
+<style>
+  :root {
+    --bg: #0d1117;
+    --panel: #151b23;
+    --border: #2a323d;
+    --text: #d8dee9;
+    --muted: #7b8798;
+    --accent: #3fb950;
+    --accent-dim: #2a7a3a;
+    --warn: #e3b341;
+    --danger: #f85149;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    height: 100%;
+    overflow: hidden;
+    background: var(--bg);
+    color: var(--text);
+    font-family: ui-monospace, "SF Mono", "Cascadia Code", Consolas, monospace;
+    user-select: none;
+    -webkit-tap-highlight-color: transparent;
+  }
+  body {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 6px 8px 8px;
+  }
+
+  /* Header: name, interface, clock */
+  header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    height: 24px;
+    font-size: 12px;
+    color: var(--muted);
+  }
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    color: var(--accent);
+    font-weight: bold;
+    font-size: 14px;
+    letter-spacing: 0.06em;
+  }
+  .brand svg { width: 22px; height: 18px; }
+  .iface { flex: 1; text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .iface b { color: var(--text); font-weight: normal; }
+  .dot {
+    display: inline-block;
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: var(--muted);
+    margin-right: 4px;
+    vertical-align: 0;
+  }
+  .dot.up { background: var(--accent); }
+
+  /* Status band: phase + progress bar */
+  .status {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 7px 10px 8px;
+  }
+  .status-line {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    font-size: 13px;
+    margin-bottom: 6px;
+    white-space: nowrap;
+  }
+  .phase { color: var(--text); overflow: hidden; text-overflow: ellipsis; }
+  .phase.scanning { color: var(--accent); }
+  .phase.scanning::before { content: "\25CF  "; animation: blink 1s steps(1) infinite; }
+  .phase.error { color: var(--danger); }
+  .status-right { color: var(--muted); margin-left: 8px; }
+  @keyframes blink { 50% { opacity: 0; } }
+  .bar {
+    height: 8px;
+    background: var(--bg);
+    border-radius: 4px;
+    overflow: hidden;
+  }
+  .bar-fill {
+    height: 100%;
+    width: 0;
+    background: var(--accent);
+    border-radius: 4px;
+    transition: width 0.6s ease;
+  }
+  .bar-fill.idle { background: var(--accent-dim); }
+  /* Unknown % (e.g. between phases): sweeping stripe */
+  .bar-fill.indeterminate {
+    width: 30% !important;
+    animation: sweep 1.4s ease-in-out infinite;
+  }
+  @keyframes sweep { 0% { transform: translateX(-100%); } 100% { transform: translateX(340%); } }
+
+  /* Headline numbers */
+  .tiles {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 6px;
+  }
+  .tile {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 5px 8px 6px;
+    text-align: center;
+  }
+  .tile .num {
+    font-size: 30px;
+    line-height: 34px;
+    font-weight: bold;
+    color: var(--text);
+    white-space: nowrap;
+  }
+  .tile .num.small { font-size: 20px; }
+  .tile .label {
+    font-size: 10px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+  .tile.live .num { color: var(--accent); }
+
+  /* Live feed / top services -- takes whatever height is left */
+  .feed {
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 5px 10px;
+    font-size: 12px;
+    line-height: 17px;
+  }
+  .feed-title {
+    font-size: 10px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 2px;
+  }
+  .feed-row { display: flex; justify-content: space-between; white-space: nowrap; }
+  .feed-row .ip { color: var(--text); }
+  .feed-row .port { color: var(--accent); }
+  .feed-row.new { animation: flash 1.2s ease-out; }
+  @keyframes flash { from { background: var(--accent-dim); } to { background: transparent; } }
+  .chips { display: flex; flex-wrap: wrap; gap: 4px 6px; }
+  .chip {
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 0 6px;
+    color: var(--text);
+  }
+  .chip span { color: var(--accent); margin-left: 4px; }
+  .feed .muted { color: var(--muted); }
+  .feed .error { color: var(--danger); }
+
+  /* Controls -- finger-sized */
+  .controls {
+    display: grid;
+    grid-template-columns: 3fr 2fr;
+    gap: 6px;
+  }
+  button {
+    height: 46px;
+    border: 1px solid var(--accent-dim);
+    border-radius: 6px;
+    background: var(--accent-dim);
+    color: #fff;
+    font-family: inherit;
+    font-size: 15px;
+    font-weight: bold;
+    letter-spacing: 0.06em;
+    touch-action: manipulation;
+  }
+  button.secondary {
+    background: var(--panel);
+    border-color: var(--border);
+    color: var(--text);
+    font-size: 13px;
+    font-weight: normal;
+  }
+  button:active { background: var(--accent); }
+  button.secondary:active { background: var(--border); }
+  button:disabled { opacity: 0.45; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="brand">
+    <svg viewBox="0 0 120 100" xmlns="http://www.w3.org/2000/svg" fill="currentColor" aria-hidden="true">
+      <path d="M30 70 L10 85 L35 78 Z"/>
+      <ellipse cx="55" cy="60" rx="22" ry="14" transform="rotate(-10 55 60)"/>
+      <path d="M50 50 C40 20, 70 15, 85 35 C70 30, 55 35, 50 50 Z"/>
+      <circle cx="82" cy="45" r="11"/>
+      <path d="M92 45 L104 42 L92 50 Z"/>
+      <path d="M60 72 L58 88 M68 73 L70 89" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"/>
+    </svg>
+    ALIANA
+  </div>
+  <div class="iface"><span class="dot" id="iface-dot"></span><b id="iface-name">&mdash;</b> <span id="iface-ip"></span></div>
+  <div id="clock">--:--</div>
+</header>
+
+<section class="status">
+  <div class="status-line">
+    <span class="phase" id="phase">Connecting&hellip;</span>
+    <span class="status-right" id="status-right"></span>
+  </div>
+  <div class="bar"><div class="bar-fill" id="bar"></div></div>
+</section>
+
+<section class="tiles">
+  <div class="tile" id="tile-hosts"><div class="num" id="hosts">&ndash;</div><div class="label">Hosts up</div></div>
+  <div class="tile" id="tile-ports"><div class="num" id="ports">&ndash;</div><div class="label">Open ports</div></div>
+  <div class="tile"><div class="num small" id="third">&ndash;</div><div class="label" id="third-label">Last scan</div></div>
+</section>
+
+<section class="feed" id="feed"><div class="muted">Waiting for data&hellip;</div></section>
+
+<section class="controls">
+  <button id="scan-btn" type="button">SCAN NOW</button>
+  <button id="iface-btn" class="secondary" type="button">IFACE &#x21bb;</button>
+</section>
+
+<script>
+(function () {
+  var $ = function (id) { return document.getElementById(id); };
+  var state = null;
+  var seenRecent = {};
+  var pollTimer = null;
+  var tickTimer = null;
+
+  function esc(s) {
+    return String(s).replace(/[&<>"]/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c];
+    });
+  }
+
+  function dur(sec) {
+    if (sec == null) return "–";
+    sec = Math.max(0, Math.round(sec));
+    var m = Math.floor(sec / 60), s = sec % 60;
+    if (m >= 60) return Math.floor(m / 60) + "h" + (m % 60 ? " " + (m % 60) + "m" : "");
+    return m + ":" + (s < 10 ? "0" : "") + s;
+  }
+
+  function ago(sec) {
+    if (sec == null) return "–";
+    if (sec < 60) return "now";
+    if (sec < 3600) return Math.floor(sec / 60) + "m";
+    if (sec < 86400) return Math.floor(sec / 3600) + "h";
+    return Math.floor(sec / 86400) + "d";
+  }
+
+  function render() {
+    var s = state;
+    if (!s) return;
+    var p = s.progress;
+    var latest = s.latest;
+
+    // Header
+    $("iface-name").textContent = s.interface || "—";
+    $("iface-ip").textContent = s.interface_ip ? s.interface_ip.split("/")[0] : "no IP";
+    $("iface-dot").className = "dot" + (s.interface_ip ? " up" : "");
+
+    // Status band
+    var phase = $("phase"), right = $("status-right"), bar = $("bar");
+    if (s.running && p) {
+      phase.className = "phase scanning";
+      phase.textContent = p.phase;
+      right.textContent = (p.percent != null ? Math.round(p.percent) + "%  " : "") + dur(p.elapsed);
+      bar.className = "bar-fill" + (p.percent == null ? " indeterminate" : "");
+      bar.style.width = (p.percent || 0) + "%";
+    } else if (s.running) {
+      phase.className = "phase scanning";
+      phase.textContent = "Starting scan";
+      right.textContent = "";
+      bar.className = "bar-fill indeterminate";
+    } else if (s.error) {
+      phase.className = "phase error";
+      phase.textContent = "Last scan failed";
+      right.textContent = s.next_in != null ? "retry in " + dur(s.next_in) : "";
+      bar.className = "bar-fill idle";
+      bar.style.width = "0";
+    } else {
+      phase.className = "phase";
+      phase.textContent = "Idle";
+      if (s.next_in != null) {
+        right.textContent = "next scan in " + dur(s.next_in);
+        // Bar fills up as the next automatic scan approaches
+        bar.style.width = (100 * (1 - s.next_in / Math.max(1, s.interval))) + "%";
+      } else {
+        right.textContent = "";
+        bar.style.width = "0";
+      }
+      bar.className = "bar-fill idle";
+    }
+
+    // Tiles
+    if (s.running && p) {
+      $("hosts").textContent = p.hosts_up;
+      $("ports").textContent = p.open_ports;
+      $("third").textContent = dur(p.elapsed);
+      $("third-label").textContent = "Elapsed";
+    } else {
+      $("hosts").textContent = latest ? latest.hosts : "–";
+      $("ports").textContent = latest ? latest.open_ports : "–";
+      $("third").textContent = latest ? ago(latest.ago) : "–";
+      $("third-label").textContent = latest && latest.ago >= 60 ? "Last scan ago" : "Last scan";
+    }
+    $("tile-hosts").className = "tile" + (s.running ? " live" : "");
+    $("tile-ports").className = "tile" + (s.running ? " live" : "");
+
+    // Feed
+    var feed = $("feed"), html = "";
+    if (s.running && p) {
+      html = '<div class="feed-title">Live — ' + esc(p.subnet) + "</div>";
+      if (!p.recent.length) {
+        html += '<div class="muted">No open ports found yet…</div>';
+      }
+      p.recent.forEach(function (r) {
+        var key = r.ip + ":" + r.port + "/" + r.proto;
+        var isNew = !seenRecent[key];
+        seenRecent[key] = true;
+        html += '<div class="feed-row' + (isNew ? " new" : "") + '"><span class="ip">' + esc(r.ip) +
+          '</span><span class="port">' + r.port + "/" + esc(r.proto) + "</span></div>";
+      });
+    } else if (s.error) {
+      html = '<div class="feed-title">Error</div><div class="error">' + esc(s.error) + "</div>";
+    } else if (latest) {
+      seenRecent = {};
+      html = '<div class="feed-title">Top services — ' + esc(latest.subnet) + "</div>";
+      if (latest.services.length) {
+        html += '<div class="chips">' + latest.services.map(function (sv) {
+          return '<div class="chip">' + esc(sv.name) + "<span>" + sv.count + "</span></div>";
+        }).join("") + "</div>";
+      } else {
+        html += '<div class="muted">No open ports on the last scan.</div>';
+      }
+    } else {
+      html = '<div class="muted">No scans yet. Tap SCAN NOW to start one.</div>';
+    }
+    feed.innerHTML = html;
+
+    // Controls
+    $("scan-btn").disabled = s.running;
+    $("scan-btn").textContent = s.running ? "SCANNING…" : "SCAN NOW";
+    $("iface-btn").disabled = s.running || s.interfaces.length < 2;
+  }
+
+  function apply(data) {
+    state = data;
+    render();
+  }
+
+  function poll() {
+    clearTimeout(pollTimer);
+    fetch("/api/kiosk", { cache: "no-store" })
+      .then(function (r) { return r.json(); })
+      .then(apply)
+      .catch(function () {
+        $("phase").className = "phase error";
+        $("phase").textContent = "Aliana not responding";
+      })
+      .then(function () {
+        // Fast updates while scanning, slower when idle
+        pollTimer = setTimeout(poll, state && state.running ? 1000 : 3000);
+      });
+  }
+
+  function post(url) {
+    fetch(url, { method: "POST" })
+      .then(function (r) { return r.json(); })
+      .then(apply)
+      .catch(function () {})
+      .then(poll);
+  }
+
+  $("scan-btn").addEventListener("click", function () {
+    if (state && state.running) return;
+    $("scan-btn").disabled = true;
+    $("scan-btn").textContent = "STARTING…";
+    post("/api/scan");
+  });
+  $("iface-btn").addEventListener("click", function () {
+    post("/api/interface/next");
+  });
+
+  // Clock + local countdown between polls
+  function tick() {
+    var d = new Date();
+    $("clock").textContent = (d.getHours() < 10 ? "0" : "") + d.getHours() + ":" +
+      (d.getMinutes() < 10 ? "0" : "") + d.getMinutes();
+    if (state) {
+      if (state.progress) state.progress.elapsed += 1;
+      if (state.next_in != null && state.next_in > 0) state.next_in -= 1;
+      if (state.latest && state.latest.ago != null) state.latest.ago += 1;
+      render();
+    }
+  }
+  tickTimer = setInterval(tick, 1000);
+  tick();
+  poll();
+})();
+</script>
+</body>
+</html>

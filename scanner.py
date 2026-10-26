@@ -11,13 +11,135 @@ import ipaddress
 import os
 import tempfile
 import uuid
+import re
+import pty
+import select
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "aliana.db")
 SCAN_INTERFACE = os.environ.get("ALIANA_IFACE", "usb0")
 SCAN_INTERVAL_SECONDS = int(os.environ.get("ALIANA_SCAN_INTERVAL", "300"))  # 5 min default
 
 _scan_lock = threading.Lock()
-_last_scan_status = {"running": False, "last_run": None, "last_error": None}
+_last_scan_status = {"running": False, "last_run": None, "last_error": None, "next_run": None}
+
+# Live info about the scan in progress, filled in from nmap's verbose output
+# as it runs, so the kiosk screen can show what's happening mid-scan.
+_progress = {}
+
+# nmap -v output lines we care about
+_RE_INITIATING = re.compile(r"^Initiating (.+?)(?: at \d\d:\d\d|$)")
+_RE_PERCENT = re.compile(r"About ([\d.]+)% done")
+_RE_SCANNING_N = re.compile(r"^Scanning (\d+) hosts")
+_RE_SCANNING_ONE = re.compile(r"^Scanning \S+.*\[\d+ ports")
+_RE_DNS = re.compile(r"Parallel DNS resolution of (\d+) hosts?")
+_RE_OPEN = re.compile(r"^Discovered open port (\d+)/(\w+) on (\S+)")
+
+# Friendlier names for nmap's scan phases
+_PHASES = [
+    ("Ping Scan", "Discovering hosts"),
+    ("ARP Ping", "Discovering hosts"),
+    ("DNS", "Resolving names"),
+    ("SYN Stealth", "Scanning ports"),
+    ("Connect Scan", "Scanning ports"),
+    ("Service scan", "Identifying services"),
+    ("NSE", "Running checks"),
+    ("OS detection", "Detecting OS"),
+]
+
+
+def _reset_progress(subnet):
+    _progress.clear()
+    _progress.update({
+        "subnet": subnet,
+        "started": time.time(),
+        "phase": "Starting",
+        "percent": None,
+        "hosts_up": 0,
+        "open_ports": 0,
+        "recent": [],  # newest first: {"ip", "port", "proto"}
+    })
+
+
+def _handle_nmap_line(line):
+    """Updates _progress from one line of nmap -v output."""
+    line = line.strip()
+    m = _RE_INITIATING.search(line)
+    if m:
+        name = m.group(1)
+        for key, friendly in _PHASES:
+            if key in name:
+                _progress["phase"] = friendly
+                break
+        else:
+            _progress["phase"] = name
+        _progress["percent"] = None
+        m = _RE_DNS.search(line)
+        if m:
+            _progress["hosts_up"] = max(_progress["hosts_up"], int(m.group(1)))
+        return
+    m = _RE_PERCENT.search(line)
+    if m:
+        _progress["percent"] = float(m.group(1))
+        return
+    # "Scanning N hosts" during host discovery means addresses to probe, not
+    # hosts found -- only trust it once the port scan has started.
+    discovering = _progress["phase"] in ("Starting", "Discovering hosts")
+    m = _RE_SCANNING_N.search(line)
+    if m:
+        if not discovering:
+            _progress["hosts_up"] = max(_progress["hosts_up"], int(m.group(1)))
+        return
+    if _RE_SCANNING_ONE.search(line):
+        if not discovering:
+            _progress["hosts_up"] = max(_progress["hosts_up"], 1)
+        return
+    m = _RE_OPEN.search(line)
+    if m:
+        _progress["open_ports"] += 1
+        _progress["recent"].insert(0, {"port": int(m.group(1)), "proto": m.group(2), "ip": m.group(3)})
+        del _progress["recent"][8:]
+
+
+def _run_nmap_live(cmd, timeout):
+    """Runs nmap, feeding each output line to _handle_nmap_line as it arrives.
+    nmap's stdout goes to a pseudo-terminal so it's line-buffered (a plain
+    pipe would hold the output back until the scan finished). Returns the last
+    few output lines, for error messages."""
+    master, slave = pty.openpty()
+    proc = subprocess.Popen(cmd, stdout=slave, stderr=slave, stdin=subprocess.DEVNULL, close_fds=True)
+    os.close(slave)
+    deadline = time.time() + timeout
+    buf = b""
+    tail = []
+    try:
+        while True:
+            if time.time() > deadline:
+                proc.kill()
+                raise subprocess.TimeoutExpired(cmd, timeout)
+            ready, _, _ = select.select([master], [], [], 1.0)
+            if not ready:
+                if proc.poll() is not None:
+                    break
+                continue
+            try:
+                chunk = os.read(master, 4096)
+            except OSError:  # EIO: nmap exited and closed the terminal
+                break
+            if not chunk:
+                break
+            buf += chunk
+            while b"\n" in buf:
+                raw, buf = buf.split(b"\n", 1)
+                line = raw.decode(errors="ignore").rstrip("\r")
+                if line:
+                    tail = (tail + [line])[-5:]
+                    _handle_nmap_line(line)
+    finally:
+        os.close(master)
+        proc.wait()
+    if proc.returncode != 0:
+        raise RuntimeError("nmap failed: " + " | ".join(tail)[:300])
+    return tail
 
 
 def cleanup_stale_temp_files():
@@ -174,6 +296,7 @@ def run_scan(subnet=None, fast=True):
         if not subnet:
             _last_scan_status["last_error"] = "No subnet detected to scan."
             return None
+        _reset_progress(subnet)
 
         started = datetime.datetime.now().isoformat()
         # Unique filename per scan (pid + uuid) so a leftover file from a
@@ -185,12 +308,14 @@ def run_scan(subnet=None, fast=True):
 
         # -sV: version detection, -T4: faster timing, -oX: xml output
         # fast=True keeps it to a light port set so it finishes quickly on a /24
-        cmd = ["nmap", "-sV", "-T4", "-oX", xml_path]
+        # -v and --stats-every make nmap report progress as it goes (hosts
+        # found, ports discovered, % done), which the kiosk screen shows live
+        cmd = ["nmap", "-sV", "-T4", "-v", "--stats-every", "2s", "-oX", xml_path]
         if fast:
             cmd += ["--top-ports", "100"]
         cmd.append(subnet)
 
-        subprocess.run(cmd, check=True, capture_output=True, timeout=600)
+        _run_nmap_live(cmd, timeout=600)
 
         hosts = _parse_nmap_xml(xml_path)
         finished = datetime.datetime.now().isoformat()
@@ -201,8 +326,8 @@ def run_scan(subnet=None, fast=True):
         _last_scan_status["last_error"] = None
         return scan_id
 
-    except subprocess.CalledProcessError as e:
-        _last_scan_status["last_error"] = f"nmap failed: {e.stderr.decode(errors='ignore')[:300]}"
+    except subprocess.TimeoutExpired:
+        _last_scan_status["last_error"] = "nmap timed out after 10 minutes."
         return None
     except Exception as e:
         _last_scan_status["last_error"] = str(e)
@@ -341,10 +466,56 @@ def get_status():
     return status
 
 
+def get_progress():
+    """Live progress of the running scan, or None when idle."""
+    if not _last_scan_status["running"] or not _progress:
+        return None
+    p = dict(_progress)
+    p["recent"] = list(_progress["recent"])
+    p["elapsed"] = int(time.time() - p.pop("started"))
+    return p
+
+
+def get_latest_summary():
+    """Small summary of the most recent finished scan, for the kiosk screen."""
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT id, finished_at, subnet, host_count FROM scans ORDER BY id DESC LIMIT 1")
+    row = c.fetchone()
+    if not row:
+        conn.close()
+        return None
+    scan_id, finished_at, subnet, host_count = row
+    c.execute(
+        "SELECT COUNT(*) FROM ports p JOIN hosts h ON p.host_id = h.id "
+        "WHERE h.scan_id = ? AND p.state = 'open'", (scan_id,))
+    open_ports = c.fetchone()[0]
+    c.execute(
+        "SELECT COALESCE(NULLIF(p.service, ''), p.port || '/' || p.protocol) AS svc, COUNT(*) "
+        "FROM ports p JOIN hosts h ON p.host_id = h.id "
+        "WHERE h.scan_id = ? AND p.state = 'open' GROUP BY svc ORDER BY 2 DESC, svc LIMIT 6",
+        (scan_id,))
+    services = [{"name": r[0], "count": r[1]} for r in c.fetchall()]
+    conn.close()
+    ago = None
+    try:
+        ago = int((datetime.datetime.now() - datetime.datetime.fromisoformat(finished_at)).total_seconds())
+    except (TypeError, ValueError):
+        pass
+    return {
+        "subnet": subnet,
+        "hosts": host_count,
+        "open_ports": open_ports,
+        "services": services,
+        "ago": ago,
+    }
+
+
 def background_loop():
     """Runs forever, scanning on an interval. Call in a daemon thread."""
     init_db()
     cleanup_stale_temp_files()
     while True:
         run_scan()
+        _last_scan_status["next_run"] = time.time() + SCAN_INTERVAL_SECONDS
         time.sleep(SCAN_INTERVAL_SECONDS)

@@ -1,9 +1,10 @@
 #!/bin/sh
 # Starts a bare window manager + Chromium in kiosk mode, pointed straight
-# at the Aliana dashboard. (The old splash page was dropped: Chromium's own
-# cold start is slower than Flask's, so the splash was never visible.)
+# at Aliana's compact onboard-screen page (/kiosk). (The old splash page
+# was dropped: Chromium's own cold start is slower than Flask's, so the
+# splash was never visible.)
 
-DASHBOARD_URL="http://localhost:8080/"
+DASHBOARD_URL="http://localhost:8080/kiosk"
 
 # Set the root window to solid black immediately -- otherwise X's default
 # grey/checkered background shows briefly before anything else loads.
