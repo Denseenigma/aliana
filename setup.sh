@@ -23,8 +23,8 @@ echo "==> Granting nmap raw-socket capability (no-op if already set)..."
 sudo setcap cap_net_raw,cap_net_admin+eip "$(which nmap)"
 
 echo "==> Installing kiosk files..."
-mkdir -p "$HOME/.aliana-kiosk"
-cp "$REPO_DIR/kiosk/splash.html" "$HOME/.aliana-kiosk/splash.html"
+# Old splash page location -- no longer used, clean it up
+rm -rf "$HOME/.aliana-kiosk"
 cp "$REPO_DIR/kiosk/.xinitrc" "$HOME/.xinitrc"
 chmod +x "$HOME/.xinitrc"
 

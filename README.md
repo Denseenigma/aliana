@@ -18,7 +18,6 @@ aliana/
     index.html          dashboard page
   kiosk/
     .xinitrc             launches Chromium in kiosk mode on boot
-    splash.html          black splash screen shown while Aliana starts
     bash_profile_snippet.sh   autostarts X on the console login
 ```
 
@@ -55,7 +54,7 @@ bash setup.sh
 ```
 
 `setup.sh` creates the Python venv, installs dependencies, grants nmap
-raw-socket access, installs the kiosk files (`.xinitrc`, splash screen,
+raw-socket access, installs the kiosk files (`.xinitrc`,
 `.bash_profile` autostart block), and installs/enables/starts the
 `aliana` systemd service.
 
@@ -111,9 +110,8 @@ used only before anything's been selected in the UI:
 ## Kiosk mode (optional)
 
 If a screen is attached and you want Aliana to boot straight into it in
-kiosk mode, `setup.sh` already wires this up. It shows a black splash
-screen with a pulsing icon while Aliana's Flask server starts, then
-navigates to the dashboard automatically once it's reachable.
+kiosk mode, `setup.sh` already wires this up. Chromium opens straight to
+the dashboard once Aliana's Flask server is answering.
 
 ## Notes
 

@@ -1,11 +1,9 @@
 #!/bin/sh
-# Starts a bare window manager + Chromium in kiosk mode, pointed at the
-# Aliana splash screen. The splash page itself polls the Aliana Flask
-# server in the background and navigates to the dashboard once it's
-# ready -- all within one Chromium instance, so there's no second
-# cold-start browser launch (which was the slow part before).
+# Starts a bare window manager + Chromium in kiosk mode, pointed straight
+# at the Aliana dashboard. (The old splash page was dropped: Chromium's own
+# cold start is slower than Flask's, so the splash was never visible.)
 
-SPLASH="$HOME/.aliana-kiosk/splash.html"
+DASHBOARD_URL="http://localhost:8080/"
 
 # Set the root window to solid black immediately -- otherwise X's default
 # grey/checkered background shows briefly before anything else loads.
@@ -24,9 +22,18 @@ xset -dpms
 openbox-session &
 sleep 1
 
-# Launch Chromium once, pointed at the splash page. It'll navigate itself
-# to the real dashboard once Aliana's Flask server responds.
+# Make sure Flask is answering before Chromium opens the page, so we never
+# land on an error page. Normally this returns instantly (the systemd
+# service starts well before the console login); gives up after 60s.
+for i in $(seq 1 120); do
+    curl -s -o /dev/null "$DASHBOARD_URL" && break
+    sleep 0.5
+done
+
+# The SPI screen has no GPU acceleration, so skip Chromium's GPU startup
+# probing -- it only slows the launch down.
 exec chromium-browser \
+    --disable-gpu \
     --kiosk \
     --noerrdialogs \
     --disable-infobars \
@@ -37,4 +44,4 @@ exec chromium-browser \
     --check-for-update-interval=31536000 \
     --window-size=480,320 \
     --window-position=0,0 \
-    "file://$SPLASH"
+    "$DASHBOARD_URL"
