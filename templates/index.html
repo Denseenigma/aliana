@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Aliana Recon</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --panel: #151b23;
+    --border: #2a323d;
+    --text: #d8dee9;
+    --muted: #7b8798;
+    --accent: #3fb950;
+    --accent-dim: #2a7a3a;
+    --warn: #e3b341;
+    --danger: #f85149;
+  }
+  * { box-sizing: border-box; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: ui-monospace, "SF Mono", "Cascadia Code", Consolas, monospace;
+    margin: 0;
+    padding: 24px;
+  }
+  header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 12px;
+    margin-bottom: 24px;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 16px;
+  }
+  h1 {
+    font-size: 1.4rem;
+    margin: 0;
+    color: var(--accent);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  h1 span { color: var(--muted); font-weight: normal; font-size: 0.9rem; }
+  .crow-icon {
+    width: 28px;
+    height: 24px;
+    flex-shrink: 0;
+  }
+  .status-bar {
+    display: flex;
+    gap: 16px;
+    font-size: 0.85rem;
+    color: var(--muted);
+    flex-wrap: wrap;
+  }
+  .status-bar strong { color: var(--text); }
+  .dot {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    margin-right: 6px;
+  }
+  .dot.running { background: var(--warn); }
+  .dot.idle { background: var(--accent); }
+  button {
+    background: var(--accent-dim);
+    color: #fff;
+    border: none;
+    padding: 8px 16px;
+    border-radius: 6px;
+    font-family: inherit;
+    cursor: pointer;
+    font-size: 0.85rem;
+  }
+  button:hover { background: var(--accent); }
+  select {
+    background: var(--panel);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 7px 10px;
+    font-family: inherit;
+    font-size: 0.85rem;
+  }
+  .iface-form { display: inline-flex; }
+  .grid {
+    display: grid;
+    grid-template-columns: 2fr 1fr;
+    gap: 20px;
+  }
+  @media (max-width: 800px) {
+    .grid { grid-template-columns: 1fr; }
+  }
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px;
+    margin-bottom: 20px;
+  }
+  .panel h2 {
+    font-size: 1rem;
+    margin: 0 0 12px 0;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+  .host-card {
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 12px;
+    margin-bottom: 10px;
+    background: #10151c;
+  }
+  .host-card .ip {
+    font-size: 1.05rem;
+    color: var(--accent);
+    font-weight: bold;
+  }
+  .host-card .meta {
+    color: var(--muted);
+    font-size: 0.8rem;
+    margin: 4px 0 8px 0;
+  }
+  table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
+  th, td { text-align: left; padding: 4px 8px; border-bottom: 1px solid var(--border); }
+  th { color: var(--muted); font-weight: normal; }
+  .state-open { color: var(--accent); }
+  .state-closed, .state-filtered { color: var(--muted); }
+  .empty { color: var(--muted); font-style: italic; }
+  .history-row {
+    display: flex;
+    justify-content: space-between;
+    padding: 6px 0;
+    border-bottom: 1px solid var(--border);
+    font-size: 0.82rem;
+  }
+  .history-row:last-child { border-bottom: none; }
+  .error-banner {
+    background: #3a1414;
+    border: 1px solid var(--danger);
+    color: var(--danger);
+    padding: 10px;
+    border-radius: 6px;
+    margin-bottom: 16px;
+    font-size: 0.85rem;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>
+    <svg class="crow-icon" viewBox="0 0 120 100" xmlns="http://www.w3.org/2000/svg" fill="currentColor">
+      <path d="M30 70 L10 85 L35 78 Z"/>
+      <ellipse cx="55" cy="60" rx="22" ry="14" transform="rotate(-10 55 60)"/>
+      <path d="M50 50 C40 20, 70 15, 85 35 C70 30, 55 35, 50 50 Z"/>
+      <circle cx="82" cy="45" r="11"/>
+      <path d="M92 45 L104 42 L92 50 Z"/>
+      <path d="M60 72 L58 88 M68 73 L70 89" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"/>
+    </svg>
+    Aliana <span>network recon</span>
+  </h1>
+  <div class="status-bar">
+    <span>
+      <span class="dot {{ 'running' if status.running else 'idle' }}"></span>
+      {{ 'Scanning...' if status.running else 'Idle' }}
+    </span>
+    <span>Last run: <strong>{{ status.last_run or 'never' }}</strong></span>
+
+    <form action="{{ url_for('set_interface') }}" method="post" class="iface-form">
+      <select name="interface" onchange="this.form.submit()">
+        {% for iface in interfaces %}
+        <option value="{{ iface.name }}" {{ 'selected' if iface.name == status.interface else '' }}>
+          {{ iface.name }} — {{ iface.state }}{% if iface.ipv4 %} ({{ iface.ipv4 }}){% endif %}
+        </option>
+        {% endfor %}
+        {% if status.interface not in interfaces | map(attribute='name') | list %}
+        <option value="{{ status.interface }}" selected>{{ status.interface }} (not detected)</option>
+        {% endif %}
+      </select>
+    </form>
+
+    <form action="{{ url_for('scan_now') }}" method="post">
+      <button type="submit" {{ 'disabled' if status.running else '' }}>Scan now</button>
+    </form>
+  </div>
+</header>
+
+{% if status.last_error %}
+<div class="error-banner">⚠ {{ status.last_error }}</div>
+{% endif %}
+
+<div class="grid">
+  <div>
+    <div class="panel">
+      <h2>
+        {% if scan %}
+          Latest scan — {{ scan.subnet }} — {{ scan.host_count }} host(s) — {{ scan.finished_at }}
+        {% else %}
+          Latest scan
+        {% endif %}
+      </h2>
+
+      {% if scan and scan.hosts %}
+        {% for host in scan.hosts %}
+        <div class="host-card">
+          <div class="ip">{{ host.ip }} {% if host.hostname %}<span style="color:var(--muted); font-weight:normal; font-size:0.85rem;">({{ host.hostname }})</span>{% endif %}</div>
+          <div class="meta">
+            {{ host.status }}
+            {% if host.mac %} · {{ host.mac }}{% endif %}
+            {% if host.vendor %} · {{ host.vendor }}{% endif %}
+          </div>
+          {% if host.ports %}
+          <table>
+            <tr><th>Port</th><th>Proto</th><th>State</th><th>Service</th><th>Product / Version</th></tr>
+            {% for p in host.ports %}
+            <tr>
+              <td>{{ p.port }}</td>
+              <td>{{ p.protocol }}</td>
+              <td class="state-{{ p.state }}">{{ p.state }}</td>
+              <td>{{ p.service }}</td>
+              <td>{{ p.product }} {{ p.version }}</td>
+            </tr>
+            {% endfor %}
+          </table>
+          {% else %}
+          <div class="empty">No open ports found in scanned range.</div>
+          {% endif %}
+        </div>
+        {% endfor %}
+      {% else %}
+        <div class="empty">No scan results yet. Click "Scan now" or wait for the next automatic scan.</div>
+      {% endif %}
+    </div>
+  </div>
+
+  <div>
+    <div class="panel">
+      <h2>Scan history</h2>
+      {% if history %}
+        {% for h in history %}
+        <div class="history-row">
+          <span>{{ h.subnet }}</span>
+          <span>{{ h.host_count }} hosts</span>
+          <span style="color:var(--muted)">{{ h.finished_at or 'running' }}</span>
+        </div>
+        {% endfor %}
+      {% else %}
+        <div class="empty">No history yet.</div>
+      {% endif %}
+    </div>
+  </div>
+</div>
+
+</body>
+</html>

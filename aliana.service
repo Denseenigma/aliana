@@ -1,0 +1,16 @@
+[Unit]
+Description=Aliana recon dashboard
+After=network.target
+
+[Service]
+Type=simple
+User=admin
+WorkingDirectory=/home/admin/aliana
+Environment=ALIANA_IFACE=usb0
+Environment=ALIANA_SCAN_INTERVAL=300
+ExecStart=/home/admin/aliana/venv/bin/python3 /home/admin/aliana/app.py
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
