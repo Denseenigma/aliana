@@ -133,9 +133,17 @@ On the onboard screen, the **WI-FI** button shows the current network,
 signal and address, plus a QR code that opens the Wi-Fi page on a phone
 (the phone needs to be on a network that can reach the Pi).
 
-If Wi-Fi shows as off or never finds networks on a fresh Pi, the Wi-Fi
-country may not be set yet: `sudo raspi-config nonint do_wifi_country US`
-(use your country code), then reboot.
+If Wi-Fi shows as off or `nmcli device` lists wlan0 as "unavailable", the
+radio is blocked or the Wi-Fi country isn't set yet (use your country code):
+
+```bash
+sudo rfkill unblock wifi
+sudo iw reg set US
+nmcli radio wifi on
+# make the country permanent:
+grep -q ieee80211_regdom /boot/firmware/cmdline.txt || \
+  sudo sed -i '1 s/$/ cfg80211.ieee80211_regdom=US/' /boot/firmware/cmdline.txt
+```
 
 ## Notes
 

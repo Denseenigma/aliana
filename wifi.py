@@ -11,19 +11,38 @@ class WifiError(Exception):
     pass
 
 
-def _nmcli(args, timeout=20):
+def _is_auth_error(msg):
+    m = msg.lower()
+    return "not authorized" in m or "insufficient privileges" in m or "not permitted" in m
+
+
+def _run(cmd, timeout):
     try:
-        r = subprocess.run(["nmcli"] + args, capture_output=True, text=True, timeout=timeout)
+        return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
     except FileNotFoundError:
-        raise WifiError("nmcli not found -- is NetworkManager installed?")
+        raise WifiError(f"{cmd[0]} not found -- is NetworkManager installed?")
     except subprocess.TimeoutExpired:
         raise WifiError("Timed out talking to NetworkManager.")
+
+
+def _nmcli(args, timeout=20):
+    """Runs nmcli. If NetworkManager refuses (polkit didn't grant the service
+    user access), retries through sudo -- setup.sh allows passwordless sudo
+    for nmcli only."""
+    r = _run(["nmcli"] + args, timeout)
+    msg = (r.stderr or r.stdout).strip()
+    if r.returncode != 0 and _is_auth_error(msg):
+        r = _run(["sudo", "-n", "nmcli"] + args, timeout)
+        msg = (r.stderr or r.stdout).strip()
+        if r.returncode != 0 and ("password is required" in msg or "not allowed" in msg):
+            raise WifiError("Not authorized to change Wi-Fi. Run `bash setup.sh` on the Pi, "
+                            "then `sudo systemctl restart aliana`.")
     if r.returncode != 0:
-        msg = (r.stderr or r.stdout).strip().replace("Error: ", "")
+        msg = msg.replace("Error: ", "")
         if "networkmanager is not running" in msg.lower():
             msg = "NetworkManager isn't running on the Pi, so Wi-Fi can't be managed from here yet."
-        elif "not authorized" in msg.lower() or "insufficient privileges" in msg.lower():
-            msg = "Not authorized to change Wi-Fi. Re-run setup.sh on the Pi to grant Aliana permission."
+        elif _is_auth_error(msg):
+            msg = "Not authorized to change Wi-Fi. Run `bash setup.sh` on the Pi, then `sudo systemctl restart aliana`."
         raise WifiError(msg or f"nmcli exited with code {r.returncode}")
     return r.stdout
 

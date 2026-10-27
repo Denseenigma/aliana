@@ -74,8 +74,9 @@ if systemctl is-enabled --quiet dhcpcd 2>/dev/null && ! systemctl is-active --qu
     echo "    disabled inactive dhcpcd"
 fi
 # Don't let boot wait for a network to come online (it can stall the
-# kiosk for minutes when no network is available)
-sudo systemctl disable NetworkManager-wait-online >/dev/null 2>&1 || true
+# kiosk for minutes when no network is available). NetworkManager's own
+# wait-online is disabled further down, AFTER enabling NetworkManager --
+# enabling it switches wait-online back on.
 sudo mkdir -p /etc/systemd/system/systemd-networkd-wait-online.service.d
 sudo tee /etc/systemd/system/systemd-networkd-wait-online.service.d/override.conf > /dev/null <<'EOF'
 [Service]
@@ -84,6 +85,7 @@ ExecStart=/lib/systemd/systemd-networkd-wait-online --any --timeout=5
 EOF
 sudo systemctl daemon-reload
 sudo systemctl enable NetworkManager >/dev/null 2>&1
+sudo systemctl disable NetworkManager-wait-online >/dev/null 2>&1 || true
 if systemctl is-active --quiet NetworkManager; then
     sudo systemctl reload NetworkManager || sudo systemctl restart NetworkManager
 else
@@ -106,6 +108,14 @@ polkit.addRule(function(action, subject) {
 });
 EOF
 sudo systemctl restart polkit 2>/dev/null || true
+# Fallback if polkit doesn't apply: passwordless sudo for nmcli only
+NMCLI="$(command -v nmcli || echo /usr/bin/nmcli)"
+echo "$ALIANA_USER ALL=(root) NOPASSWD: $NMCLI" | sudo tee /etc/sudoers.d/aliana-nmcli > /dev/null
+sudo chmod 440 /etc/sudoers.d/aliana-nmcli
+if ! sudo visudo -cf /etc/sudoers.d/aliana-nmcli >/dev/null; then
+    echo "    WARNING: sudoers entry failed validation, removing it"
+    sudo rm -f /etc/sudoers.d/aliana-nmcli
+fi
 
 echo "==> Installing/updating systemd service..."
 sudo cp "$REPO_DIR/aliana.service" /etc/systemd/system/aliana.service
