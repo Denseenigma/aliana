@@ -1,0 +1,11 @@
+[Unit]
+Description=Aliana: keep /etc/hosts in sync with the hostname
+After=local-fs.target
+Before=aliana.service getty@tty1.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/aliana-sync-hostname
+
+[Install]
+WantedBy=multi-user.target

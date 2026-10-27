@@ -16,6 +16,7 @@ aliana/
   requirements.txt
   aliana.service       systemd unit (expects the repo cloned at ~/aliana)
   setup.sh             one-time/after-pull install steps (Pi only)
+  system/              boot-time helpers installed by setup.sh (hostname sync)
   templates/
     index.html          full dashboard (browser)
     kiosk.html          compact control screen for the 480x320 display

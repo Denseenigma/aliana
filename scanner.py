@@ -23,6 +23,12 @@ SCAN_INTERVAL_SECONDS = int(os.environ.get("ALIANA_SCAN_INTERVAL", "300"))  # 5 
 # (and its network links) can settle after boot
 FIRST_SCAN_DELAY_SECONDS = int(os.environ.get("ALIANA_FIRST_SCAN_DELAY", "60"))
 
+# Run nmap with --privileged, relying on the raw-socket capabilities setup.sh
+# grants it: ARP host discovery on the local subnet (the only way to get MAC
+# addresses + vendors) and SYN port scans. Set ALIANA_NMAP_PRIVILEGED=0 to
+# fall back to unprivileged connect scans.
+NMAP_PRIVILEGED = os.environ.get("ALIANA_NMAP_PRIVILEGED", "1") == "1"
+
 # Scan profiles, gentlest first. "args" are the nmap options that define
 # what each one does; output/progress options are added in run_scan().
 PROFILES = {
@@ -402,7 +408,10 @@ def run_scan(subnet=None, profile=None):
         # -v and --stats-every make nmap report progress as it goes (hosts
         # found, ports discovered, % done), which the kiosk screen shows live.
         p = PROFILES[profile]
-        cmd = ["nmap"] + p["args"] + ["-v", "--stats-every", "2s", "-oX", xml_path, subnet]
+        cmd = ["nmap"]
+        if NMAP_PRIVILEGED:
+            cmd.append("--privileged")
+        cmd += p["args"] + ["-v", "--stats-every", "2s", "-oX", xml_path, subnet]
 
         timeout = p["timeout"]
         _run_nmap_live(cmd, timeout=timeout)

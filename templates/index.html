@@ -483,12 +483,11 @@
               <span class="count tag {{ '' if open_ports else 'outline' }}">{{ open_ports | length }} open</span>
               {% endif %}
             </div>
-            {% if host.mac or host.vendor %}
             <div class="meta">
-              {% if host.vendor %}{{ host.vendor }}{% endif %}
-              {% if host.mac %}{% if host.vendor %} &middot; {% endif %}<span class="mac">{{ host.mac }}</span>{% endif %}
+              {% if host.ip in own_ips %}<span class="tag">THIS UNIT</span>
+              {% elif host.mac %}{% if host.vendor %}{{ host.vendor }} &middot; {% endif %}<span class="mac">{{ host.mac }}</span>
+              {% else %}<span class="mac">MAC &ndash;</span>{% endif %}
             </div>
-            {% endif %}
             {% if host.ports %}
             <table>
               <tr><th>Port</th><th>Service</th><th>Product / version</th></tr>

@@ -31,6 +31,14 @@ for i in $(seq 1 120); do
     sleep 0.5
 done
 
+# Chromium ties its profile lock to the hostname. After a rename (or an
+# unclean shutdown) it thinks the profile is "in use by another computer"
+# and quits -- which takes X down with it. This is the only Chromium on the
+# Pi, so any lock left over at X startup is stale: clear it.
+rm -f "$HOME/.config/chromium/SingletonLock" \
+      "$HOME/.config/chromium/SingletonCookie" \
+      "$HOME/.config/chromium/SingletonSocket"
+
 # The SPI screen has no GPU acceleration, so skip Chromium's GPU startup
 # probing -- it only slows the launch down.
 exec chromium-browser \

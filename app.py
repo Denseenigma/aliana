@@ -58,6 +58,7 @@ def index():
     return render_template(
         "index.html", scan=latest, status=status, history=history, interfaces=interfaces,
         profiles=scanner.PROFILES,
+        own_ips={i["ipv4"].split("/")[0] for i in interfaces if i["ipv4"]},
     )
 
 

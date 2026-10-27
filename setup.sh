@@ -22,6 +22,15 @@ fi
 echo "==> Granting nmap raw-socket capability (no-op if already set)..."
 sudo setcap cap_net_raw,cap_net_admin+eip "$(which nmap)"
 
+echo "==> Keeping /etc/hosts in sync with the hostname..."
+# A renamed Pi with a stale /etc/hosts breaks sudo and can stall the kiosk.
+# Fix it now, and install a boot-time service so future renames self-heal.
+sudo install -m 755 "$REPO_DIR/system/aliana-sync-hostname.sh" /usr/local/sbin/aliana-sync-hostname
+sudo cp "$REPO_DIR/system/aliana-sync-hostname.service" /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable aliana-sync-hostname >/dev/null 2>&1
+sudo /usr/local/sbin/aliana-sync-hostname
+
 echo "==> Installing kiosk files..."
 # Old splash page location -- no longer used, clean it up
 rm -rf "$HOME/.aliana-kiosk"
