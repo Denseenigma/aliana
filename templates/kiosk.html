@@ -1118,7 +1118,7 @@
 
   // ---- Waveform strip ----
   var wave = $("wave"), wctx = wave.getContext("2d");
-  var samples = [], energy = 0, phaseT = 0, lastCounts = null;
+  var samples = [], energy = 0, phaseT = 0, lastCounts = null, burst = 0;
 
   function waveKick(data) {   // spikes when new hosts / ports turn up
     var p = data.running && data.progress;
@@ -1135,18 +1135,27 @@
     var w = wave.width, h = wave.height, mid = h / 2;
     var running = state && state.running;
     phaseT += 0.35;
-    energy *= 0.93;
-    var v = running
-      ? Math.sin(phaseT) * 0.18 + Math.sin(phaseT * 2.7) * 0.08 + (Math.random() - 0.5) * (0.25 + energy * 1.6)
-      : (Math.random() - 0.5) * 0.04;
+    energy *= 0.9;
+    var v;
+    if (running) {
+      // Erratic signal: jittery base, random bursts of chatter, and the
+      // occasional sharp single spike -- plus big kicks when hosts/ports turn up.
+      if (burst > 0) burst--;
+      else if (Math.random() < 0.07) burst = 3 + Math.floor(Math.random() * 7);
+      var amp = 0.18 + energy * 1.8 + (burst > 0 ? 0.55 + Math.random() * 0.4 : 0);
+      v = Math.sin(phaseT * (1 + Math.random() * 0.6)) * 0.12 + (Math.random() - 0.5) * 2 * amp;
+      if (Math.random() < 0.04) v = (Math.random() < 0.5 ? -1 : 1) * (0.75 + Math.random() * 0.25);
+    } else {
+      v = (Math.random() - 0.5) * 0.04;
+    }
     samples.push(Math.max(-1, Math.min(1, v)));
-    var step = 3, max = Math.ceil(w / step) + 1;
+    var step = 2, max = Math.ceil(w / step) + 1;
     while (samples.length > max) samples.shift();
     wctx.clearRect(0, 0, w, h);
     wctx.fillStyle = "rgba(255,122,0,0.10)";            // grid ticks
     for (var gx = w - ((phaseT * 4) % 24); gx > 0; gx -= 24) wctx.fillRect(Math.round(gx), 0, 1, h);
     wctx.fillRect(0, Math.round(mid), w, 1);
-    wctx.strokeStyle = running ? "#50ff50" : "rgba(255,122,0,0.55)";
+    wctx.strokeStyle = running ? "#00e5ff" : "rgba(255,122,0,0.55)";   // cyan while scanning
     wctx.lineWidth = 1.5;
     wctx.beginPath();
     for (var i = 0; i < samples.length; i++) {
