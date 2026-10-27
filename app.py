@@ -3,6 +3,7 @@ app.py - Aliana-lite: a small recon dashboard.
 Runs nmap scans against a subnet (by default, whatever's on usb0) and
 shows the results in a web UI, with history.
 """
+import datetime
 import socket
 import subprocess
 import threading
@@ -16,6 +17,36 @@ import qr
 PORT = 8080
 
 app = Flask(__name__)
+
+
+@app.template_filter("when")
+def when(iso):
+    """'2026-10-26T21:13:41.8' -> 'Oct 26 · 21:13' (today: just '21:13')."""
+    if not iso:
+        return "never"
+    try:
+        t = datetime.datetime.fromisoformat(iso)
+    except (TypeError, ValueError):
+        return iso
+    if t.date() == datetime.date.today():
+        return t.strftime("%H:%M")
+    return f"{t.strftime('%b')} {t.day} \u00b7 {t.strftime('%H:%M')}"
+
+
+@app.template_filter("ago")
+def ago(iso):
+    """'2026-10-26T21:13:41' -> '5 min ago'."""
+    try:
+        s = (datetime.datetime.now() - datetime.datetime.fromisoformat(iso)).total_seconds()
+    except (TypeError, ValueError):
+        return ""
+    if s < 60:
+        return "just now"
+    if s < 3600:
+        return f"{int(s // 60)} min ago"
+    if s < 86400:
+        return f"{int(s // 3600)} h ago"
+    return f"{int(s // 86400)} d ago"
 
 
 @app.route("/")

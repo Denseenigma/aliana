@@ -5,176 +5,60 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Aliana Recon</title>
 <style>
-  /* Title face: "Aliana Title" -- condensed Latin cut of Noto Serif CJK JP
-     Black (SIL OFL 1.1), see static/fonts/LICENSE-AlianaTitle.txt */
+  /* Fonts: "Aliana Title" (condensed Noto Serif CJK JP Black) and "Aliana Sans"
+     (condensed Inter Bold), both SIL OFL 1.1 -- see static/fonts/LICENSE-*.txt */
   @font-face {
     font-family: "Aliana Title";
     src: url("/static/fonts/AlianaTitle.otf") format("opentype");
-    font-weight: 100 900;   /* one heavy face; never synthesize bold */
+    font-weight: 100 900;
     font-display: block;
   }
   @font-face {
-    font-family: "Aliana Sans";   /* condensed Inter Bold (SIL OFL 1.1) */
+    font-family: "Aliana Sans";
     src: url("/static/fonts/AlianaSans.otf") format("opentype");
     font-weight: 100 900;
     font-display: block;
   }
+
+  /* Theme: NERV-terminal inspired -- matches the onboard screen (kiosk.html) */
   :root {
-    /* Theme: NERV-terminal inspired -- orange line work on black
-       (matches the onboard screen, templates/kiosk.html) */
     --bg: #000;
     --panel: #0b0603;
     --border: #6b3200;
     --text: #ffd9b0;
     --muted: #b06a2c;
     --accent: #ff7a00;
-    --accent-dim: #c25a00;
-    --warn: #ff2626;
-    --danger: #ff2626;
     --green: #50ff50;
-    --title: "Aliana Title", "Times New Roman", "Liberation Serif", serif;
+    --cyan: #00e5ff;
+    --red: #ff2626;
+    --title: "Aliana Title", "Times New Roman", serif;
+    --sans: "Aliana Sans", "DejaVu Sans Condensed", "Arial Narrow", sans-serif;
+    --mono: ui-monospace, "SF Mono", "Cascadia Code", Consolas, monospace;
   }
   * { box-sizing: border-box; }
   body {
-    background: var(--bg);
-    color: var(--text);
-    font-family: ui-monospace, "SF Mono", "Cascadia Code", Consolas, monospace;
     margin: 0;
     padding: 24px;
-  }
-  header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    flex-wrap: wrap;
-    gap: 12px;
-    margin-bottom: 24px;
-    border-bottom: 1px solid var(--border);
-    padding-bottom: 16px;
-  }
-  h1 {
-    font-size: 1.4rem;
-    margin: 0;
-    color: var(--accent);
-    display: flex;
-    align-items: center;
-    gap: 10px;
-  }
-  h1 span { color: var(--muted); font-weight: normal; font-size: 0.9rem; }
-  .crow-icon {
-    width: 28px;
-    height: 24px;
-    flex-shrink: 0;
-  }
-  .status-bar {
-    display: flex;
-    gap: 16px;
-    font-size: 0.85rem;
-    color: var(--muted);
-    flex-wrap: wrap;
-  }
-  .status-bar strong { color: var(--text); }
-  .dot {
-    display: inline-block;
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    margin-right: 6px;
-  }
-  .dot.running { background: var(--warn); }
-  .dot.idle { background: var(--accent); }
-  button {
-    background: var(--accent-dim);
-    color: #fff;
-    border: none;
-    padding: 8px 16px;
-    border-radius: 6px;
-    font-family: inherit;
-    cursor: pointer;
-    font-size: 0.85rem;
-  }
-  button:hover { background: var(--accent); }
-  select {
-    background: var(--panel);
+    background: var(--bg);
     color: var(--text);
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    padding: 7px 10px;
-    font-family: inherit;
-    font-size: 0.85rem;
-  }
-  .iface-form { display: inline-flex; }
-  .grid {
-    display: grid;
-    grid-template-columns: 2fr 1fr;
-    gap: 20px;
-  }
-  @media (max-width: 800px) {
-    .grid { grid-template-columns: 1fr; }
-  }
-  .panel {
-    background: var(--panel);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 16px;
-    margin-bottom: 20px;
-  }
-  .panel h2 {
-    font-size: 1rem;
-    margin: 0 0 12px 0;
-    color: var(--muted);
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-  }
-  .host-card {
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    padding: 12px;
-    margin-bottom: 10px;
-    background: #10151c;
-  }
-  .host-card .ip {
-    font-size: 1.05rem;
-    color: var(--accent);
-    font-weight: bold;
-  }
-  .host-card .meta {
-    color: var(--muted);
-    font-size: 0.8rem;
-    margin: 4px 0 8px 0;
-  }
-  table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
-  th, td { text-align: left; padding: 4px 8px; border-bottom: 1px solid var(--border); }
-  th { color: var(--muted); font-weight: normal; }
-  .state-open { color: var(--accent); }
-  .state-closed, .state-filtered { color: var(--muted); }
-  .empty { color: var(--muted); font-style: italic; }
-  .history-row {
-    display: flex;
-    justify-content: space-between;
-    padding: 6px 0;
-    border-bottom: 1px solid var(--border);
-    font-size: 0.82rem;
-  }
-  .history-row:last-child { border-bottom: none; }
-  .error-banner {
-    background: #3a1414;
-    border: 1px solid var(--danger);
-    color: var(--danger);
-    padding: 10px;
-    border-radius: 6px;
-    margin-bottom: 16px;
-    font-size: 0.85rem;
-  }
-
-  /* ---- Theme overrides ---- */
-  body {
+    font-family: var(--sans);
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 0.03em;
     background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='28' height='48' viewBox='0 0 28 48'%3E%3Cpath d='M14 0 L28 8 L28 24 L14 32 L0 24 L0 8 Z M14 32 L14 48' fill='none' stroke='%23ff7a00' stroke-opacity='0.06'/%3E%3C/svg%3E");
   }
+  .wrap { max-width: 1280px; margin: 0 auto; }
+  .muted { color: var(--muted); }
+  .glow { text-shadow: 0 0 8px rgba(255, 122, 0, 0.35); }
+
+  /* ---------- Header ---------- */
   header {
-    border-bottom: none;
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 12px 16px;
     position: relative;
-    padding-bottom: 20px;
+    padding-bottom: 22px;
+    margin-bottom: 22px;
   }
   header::after {
     content: "";
@@ -185,113 +69,241 @@
     opacity: 0.8;
   }
   h1 {
+    margin: 0;
+    display: flex;
+    align-items: center;
+    gap: 10px;
     background: var(--accent);
     color: #000;
     font-family: var(--title);
-    font-size: 2.2rem;
+    font-weight: normal;
+    font-size: 2.4rem;
+    line-height: 1;
     letter-spacing: 0.03em;
     text-transform: uppercase;
-    padding: 2px 26px 2px 10px;
-    clip-path: polygon(0 0, 100% 0, calc(100% - 14px) 100%, 0 100%);
+    padding: 4px 30px 2px 12px;
+    clip-path: polygon(0 0, 100% 0, calc(100% - 16px) 100%, 0 100%);
   }
-  h1 span {
-    color: #000;
-    opacity: 0.7;
-    font-family: inherit;
-    font-size: 0.95rem;
-    letter-spacing: 0.15em;
-  }
-  .status-bar { text-transform: uppercase; letter-spacing: 0.04em; }
-  .dot { border-radius: 0; }
-  .dot.idle { background: var(--green); box-shadow: 0 0 5px var(--green); }
-  .dot.running { box-shadow: 0 0 6px var(--warn); animation: blink 0.8s steps(1) infinite; }
-  @keyframes blink { 50% { opacity: 0; } }
-  button {
-    background: var(--accent);
-    color: #000;
-    border-radius: 0;
-    font-family: var(--title);
-    font-size: 1.3rem;
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
-    padding: 8px 22px 8px 16px;
-    clip-path: polygon(0 0, 100% 0, 100% calc(100% - 10px), calc(100% - 10px) 100%, 0 100%);
-  }
-  button:hover { background: #ffa040; }
-  button:disabled { background: var(--border); color: var(--accent); cursor: default; }
-  select { border-radius: 0; border-color: var(--accent); color: var(--accent); background: #000; }
-  .panel {
-    border-radius: 0;
-    border-color: var(--border);
-    border-left: 3px solid var(--accent);
-    clip-path: polygon(0 0, calc(100% - 16px) 0, 100% 16px, 100% 100%, 0 100%);
-  }
-  .panel h2 {
-    display: inline-block;
-    background: var(--accent);
-    color: #000;
-    font-size: 0.8rem;
-    letter-spacing: 0.12em;
-    padding: 2px 10px;
-  }
-  .host-card {
-    border-radius: 0;
-    background: #000;
-    border-color: var(--border);
-  }
-  .host-card .ip { color: var(--accent); }
-  th { color: var(--accent); text-transform: uppercase; font-size: 0.75rem; letter-spacing: 0.08em; }
-  .state-open { color: var(--green); }
-  .history-row { border-bottom-color: var(--border); }
-  .error-banner { border-radius: 0; background: #1a0000; }
-  button.stop { background: var(--danger); }
-  button.stop:hover { background: #ff5a5a; }
-  select.profile-deep { border-color: var(--danger); color: var(--danger); }
-  select.profile-discovery { border-color: #00e5ff; color: #00e5ff; }
-  .profile-desc.profile-discovery strong { color: #00e5ff; }
-  .profile-desc.profile-deep strong { color: var(--danger); }
-  select:disabled { opacity: 0.5; }
-  .profile-desc {
-    flex-basis: 100%;
-    font-size: 0.75rem;
-    color: var(--muted);
-    letter-spacing: 0.02em;
-  }
-  .profile-desc strong { color: var(--accent); text-transform: uppercase; letter-spacing: 0.08em; }
-  button.stopping { background: #fff; color: var(--danger); animation: stopflash 0.5s steps(1) infinite; }
-  @keyframes stopflash { 50% { opacity: 0.55; } }
-  button.stopping:hover { background: #fff; }
+  h1 svg { width: 30px; height: 26px; flex-shrink: 0; }
+  h1 small { font-family: var(--sans); font-size: 0.85rem; letter-spacing: 0.2em; opacity: 0.75; }
   .nav { display: flex; gap: 4px; margin-left: auto; }
   .nav a {
     color: var(--accent);
     text-decoration: none;
     text-transform: uppercase;
     letter-spacing: 0.1em;
-    font-size: 0.8rem;
-    padding: 6px 12px;
+    font-size: 0.95rem;
+    padding: 7px 14px;
     border: 1px solid var(--border);
   }
   .nav a.on { background: var(--accent); color: #000; border-color: var(--accent); }
 
-  /* Secondary face for labels, headings, nav and tags (data stays monospace) */
-  :root { --label: "Aliana Sans", "DejaVu Sans Condensed", "Arial Narrow", sans-serif; }
-  nav a, .nav a, h2, th, dt, .tag, .status-bar, .profile-desc, details summary,
-  .panel h2, .muted, .msg, .link dd, .saved-row, .net-name, button.ghost,
-  .phone, .history-row, .host-card .meta {
-    font-family: var(--label);
-    font-variant-numeric: tabular-nums;
+  /* ---------- Control bar ---------- */
+  .controls {
+    flex-basis: 100%;
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 10px 14px;
   }
-  nav a, .nav a { font-size: 0.9rem; letter-spacing: 0.08em; }
-  h2, .panel h2 { font-size: 0.95rem; letter-spacing: 0.1em; }
-  .status-bar, .profile-desc { font-size: 0.95rem; }
-  select { font-family: var(--label); font-size: 0.95rem; }
+  .state {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-family: var(--title);
+    font-size: 1.6rem;
+    line-height: 1;
+    color: var(--accent);
+    text-transform: uppercase;
+    min-width: 130px;
+  }
+  .state.running { color: var(--red); }
+  .dot { width: 9px; height: 9px; background: var(--green); box-shadow: 0 0 6px var(--green); }
+  .state.running .dot { background: var(--red); box-shadow: 0 0 6px var(--red); animation: blink 0.8s steps(1) infinite; }
+  @keyframes blink { 50% { opacity: 0; } }
+  .kv { font-size: 0.85rem; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); }
+  .kv b { color: var(--text); font-weight: inherit; margin-left: 4px; }
+  .spacer { flex: 1; }
+  select {
+    background: #000;
+    color: var(--accent);
+    border: 1px solid var(--accent);
+    padding: 8px 10px;
+    font-family: var(--sans);
+    font-size: 0.95rem;
+    letter-spacing: 0.05em;
+  }
+  select.profile-discovery { border-color: var(--cyan); color: var(--cyan); }
+  select.profile-deep { border-color: var(--red); color: var(--red); }
+  select:disabled { opacity: 0.5; }
+  form { margin: 0; }
+  button {
+    background: var(--accent);
+    color: #000;
+    border: none;
+    font-family: var(--title);
+    font-size: 1.4rem;
+    line-height: 1;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    padding: 9px 26px 7px 18px;
+    cursor: pointer;
+    clip-path: polygon(0 0, 100% 0, 100% calc(100% - 11px), calc(100% - 11px) 100%, 0 100%);
+  }
+  button:hover { background: #ffa040; }
+  button.stop { background: var(--red); }
+  button.stop:hover { background: #ff5a5a; }
+  button.stopping { background: #fff; color: var(--red); animation: stopflash 0.5s steps(1) infinite; }
+  @keyframes stopflash { 50% { opacity: 0.55; } }
+  .profile-desc {
+    flex-basis: 100%;
+    font-size: 0.9rem;
+    color: var(--muted);
+    letter-spacing: 0.04em;
+  }
+  .profile-desc b { color: var(--accent); letter-spacing: 0.1em; text-transform: uppercase; font-weight: inherit; }
+  .profile-desc.profile-discovery b { color: var(--cyan); }
+  .profile-desc.profile-deep b { color: var(--red); }
+
+  .error-banner {
+    border: 1px solid var(--red);
+    border-left: 6px solid var(--red);
+    background: #1a0000;
+    color: var(--red);
+    padding: 10px 14px;
+    margin-bottom: 20px;
+    letter-spacing: 0.06em;
+  }
+
+  /* ---------- Tags ---------- */
+  .tag {
+    display: inline-block;
+    font-size: 0.72rem;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    padding: 2px 7px 1px;
+    background: var(--accent);
+    color: #000;
+    vertical-align: middle;
+  }
+  .tag.discovery { background: var(--cyan); }
+  .tag.deep { background: var(--red); }
+  .tag.outline { background: transparent; color: var(--muted); box-shadow: inset 0 0 0 1px var(--border); }
+
+  /* ---------- Layout ---------- */
+  .grid { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 22px; align-items: start; }
+  @media (max-width: 900px) { .grid { grid-template-columns: 1fr; } }
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--accent);
+    padding: 16px 18px 18px;
+    margin-bottom: 22px;
+    clip-path: polygon(0 0, calc(100% - 16px) 0, 100% 16px, 100% 100%, 0 100%);
+  }
+  .panel-head { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; margin-bottom: 14px; }
+  h2 {
+    margin: 0;
+    background: var(--accent);
+    color: #000;
+    font-family: var(--sans);
+    font-weight: inherit;
+    font-size: 0.95rem;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    padding: 3px 12px 2px;
+  }
+  .panel-head .kv { margin-left: auto; }
+
+  /* ---------- Stat tiles ---------- */
+  .tiles { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-bottom: 18px; }
+  @media (max-width: 700px) { .tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  .tile {
+    border: 1px solid var(--accent);
+    background: #000;
+    clip-path: polygon(0 0, calc(100% - 12px) 0, 100% 12px, 100% 100%, 0 100%);
+  }
+  .tile .label {
+    display: inline-block;
+    background: var(--accent);
+    color: #000;
+    font-size: 0.72rem;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    padding: 2px 8px 1px;
+  }
+  .tile .num {
+    font-family: var(--title);
+    font-size: 2.6rem;
+    line-height: 1.1;
+    text-align: right;
+    padding: 2px 12px 4px;
+    color: var(--text);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .tile .num.small { font-size: 1.7rem; line-height: 1.75; }
+
+  /* ---------- Host cards ---------- */
+  .hosts { display: grid; grid-template-columns: repeat(auto-fill, minmax(330px, 1fr)); gap: 12px; }
+  .host {
+    border: 1px solid var(--border);
+    background: #000;
+    padding: 12px 14px 10px;
+  }
+  .host-top { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+  .host .ip { font-family: var(--title); font-size: 1.7rem; line-height: 1; color: var(--accent); }
+  .host .name { color: var(--text); font-size: 0.95rem; letter-spacing: 0.04em; }
+  .host .count { margin-left: auto; }
+  .host .meta { color: var(--muted); font-size: 0.82rem; letter-spacing: 0.06em; margin: 6px 0 8px; }
+  .host .meta .mac { font-family: var(--mono); letter-spacing: 0; }
+  table { width: 100%; border-collapse: collapse; }
+  th {
+    text-align: left;
+    font-weight: inherit;
+    font-size: 0.72rem;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--accent);
+    padding: 4px 8px 4px 0;
+    border-bottom: 1px solid var(--border);
+  }
+  td {
+    padding: 5px 8px 5px 0;
+    border-bottom: 1px solid rgba(107, 50, 0, 0.45);
+    font-size: 0.9rem;
+    vertical-align: top;
+  }
+  tr:last-child td { border-bottom: none; }
+  td.port { font-family: var(--mono); color: var(--green); white-space: nowrap; }
+  td.svc { color: var(--text); }
+  td.ver { color: var(--muted); }
+  .empty { color: var(--muted); letter-spacing: 0.06em; padding: 4px 0; }
+
+  /* ---------- History ---------- */
+  .history { display: flex; flex-direction: column; }
+  .hrow {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 2px 10px;
+    padding: 9px 0;
+    border-bottom: 1px solid rgba(107, 50, 0, 0.6);
+  }
+  .hrow:last-child { border-bottom: none; }
+  .hrow .t { font-family: var(--title); font-size: 1.25rem; line-height: 1; color: var(--text); }
+  .hrow .n { font-family: var(--title); font-size: 1.25rem; line-height: 1; text-align: right; color: var(--accent); }
+  .hrow .n small { font-family: var(--sans); font-size: 0.7rem; letter-spacing: 0.12em; color: var(--muted); margin-left: 4px; }
+  .hrow .sub { color: var(--muted); font-size: 0.8rem; letter-spacing: 0.06em; }
+  .hrow .sub-r { text-align: right; }
 </style>
 </head>
 <body>
+<div class="wrap">
 
 <header>
-  <h1>
-    <svg class="crow-icon" viewBox="0 0 120 100" xmlns="http://www.w3.org/2000/svg" fill="currentColor">
+  <h1 class="glow">
+    <svg viewBox="0 0 120 100" xmlns="http://www.w3.org/2000/svg" fill="currentColor" aria-hidden="true">
       <path d="M30 70 L10 85 L35 78 Z"/>
       <ellipse cx="55" cy="60" rx="22" ry="14" transform="rotate(-10 55 60)"/>
       <path d="M50 50 C40 20, 70 15, 85 35 C70 30, 55 35, 50 50 Z"/>
@@ -299,21 +311,22 @@
       <path d="M92 45 L104 42 L92 50 Z"/>
       <path d="M60 72 L58 88 M68 73 L70 89" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"/>
     </svg>
-    Aliana <span>network recon</span>
+    Aliana <small>network recon</small>
   </h1>
   <nav class="nav"><a href="/" class="on">Dashboard</a><a href="/wifi">Wi-Fi</a></nav>
-  <div class="status-bar">
-    <span>
-      <span class="dot {{ 'running' if status.running else 'idle' }}"></span>
-      {{ 'Scanning...' if status.running else 'Idle' }}
-    </span>
-    <span>Last run: <strong>{{ status.last_run or 'never' }}</strong></span>
 
-    <form action="{{ url_for('set_interface') }}" method="post" class="iface-form">
-      <select name="interface" onchange="this.form.submit()">
+  <div class="controls">
+    <div class="state {{ 'running' if status.running else '' }}">
+      <span class="dot"></span>{{ 'Scanning' if status.running else 'Idle' }}
+    </div>
+    <span class="kv">Last run <b>{{ status.last_run | when }}</b></span>
+    <span class="spacer"></span>
+
+    <form action="{{ url_for('set_interface') }}" method="post">
+      <select name="interface" onchange="this.form.submit()" {{ 'disabled' if status.running else '' }}>
         {% for iface in interfaces %}
         <option value="{{ iface.name }}" {{ 'selected' if iface.name == status.interface else '' }}>
-          {{ iface.name }} — {{ iface.state }}{% if iface.ipv4 %} ({{ iface.ipv4 }}){% endif %}
+          {{ iface.name }}{% if iface.ipv4 %} &middot; {{ iface.ipv4 }}{% else %} &middot; {{ iface.state }}{% endif %}
         </option>
         {% endfor %}
         {% if status.interface not in interfaces | map(attribute='name') | list %}
@@ -322,8 +335,7 @@
       </select>
     </form>
 
-    <form action="{{ url_for('set_profile') }}" method="post" class="iface-form"
-          title="{{ profiles[status.profile].description }}">
+    <form action="{{ url_for('set_profile') }}" method="post" title="{{ profiles[status.profile].description }}">
       <select name="profile" onchange="this.form.submit()" class="profile-{{ status.profile }}"
               {{ 'disabled' if status.running else '' }}>
         {% for key, p in profiles.items() %}
@@ -336,78 +348,104 @@
           data-running="{{ '1' if status.running else '0' }}">
       <button type="submit" id="scan-btn" class="{{ 'stop' if status.running else '' }}">{{ 'Stop scan' if status.running else 'Scan now' }}</button>
     </form>
-  </div>
-  <div class="profile-desc profile-{{ status.profile }}">
-    <strong>{{ profiles[status.profile].label }}:</strong> {{ profiles[status.profile].description }}
+
+    <div class="profile-desc profile-{{ status.profile }}">
+      <b>{{ profiles[status.profile].label }}</b> &middot; {{ profiles[status.profile].description }}
+    </div>
   </div>
 </header>
 
 {% if status.last_error %}
-<div class="error-banner">⚠ {{ status.last_error }}</div>
+<div class="error-banner">LAST SCAN FAILED &middot; {{ status.last_error }}</div>
 {% endif %}
 
 <div class="grid">
   <div>
-    <div class="panel">
-      <h2>
+    <section class="panel">
+      <div class="panel-head">
+        <h2>Latest scan</h2>
         {% if scan %}
-          Latest scan — {{ scan.subnet }} — {{ scan.host_count }} host(s) — {{ scan.finished_at }}
-        {% else %}
-          Latest scan
+          {% if scan.profile and scan.profile in profiles %}<span class="tag {{ scan.profile }}">{{ profiles[scan.profile].label }}</span>{% endif %}
+          <span class="kv">{{ scan.subnet }} <b>{{ scan.finished_at | when }}</b></span>
         {% endif %}
-      </h2>
+      </div>
+
+      {% if scan %}
+        {% set ns = namespace(open=0) %}
+        {% for h in scan.hosts %}{% for p in h.ports %}{% if p.state == 'open' %}{% set ns.open = ns.open + 1 %}{% endif %}{% endfor %}{% endfor %}
+        <div class="tiles">
+          <div class="tile"><span class="label">Hosts up</span><div class="num glow">{{ scan.host_count }}</div></div>
+          <div class="tile"><span class="label">Open ports</span><div class="num glow">{{ ns.open if scan.profile != 'discovery' else '&ndash;' | safe }}</div></div>
+          <div class="tile"><span class="label">Subnet</span><div class="num small">{{ scan.subnet }}</div></div>
+          <div class="tile"><span class="label">Finished</span><div class="num small">{{ scan.finished_at | ago }}</div></div>
+        </div>
+      {% endif %}
 
       {% if scan and scan.hosts %}
+        <div class="hosts">
         {% for host in scan.hosts %}
-        <div class="host-card">
-          <div class="ip">{{ host.ip }} {% if host.hostname %}<span style="color:var(--muted); font-weight:normal; font-size:0.85rem;">({{ host.hostname }})</span>{% endif %}</div>
-          <div class="meta">
-            {{ host.status }}
-            {% if host.mac %} · {{ host.mac }}{% endif %}
-            {% if host.vendor %} · {{ host.vendor }}{% endif %}
+          {% set open_ports = host.ports | selectattr('state', 'equalto', 'open') | list %}
+          <div class="host">
+            <div class="host-top">
+              <span class="ip">{{ host.ip }}</span>
+              {% if host.hostname %}<span class="name">{{ host.hostname }}</span>{% endif %}
+              {% if scan.profile != 'discovery' %}
+              <span class="count tag {{ '' if open_ports else 'outline' }}">{{ open_ports | length }} open</span>
+              {% endif %}
+            </div>
+            {% if host.mac or host.vendor %}
+            <div class="meta">
+              {% if host.vendor %}{{ host.vendor }}{% endif %}
+              {% if host.mac %}{% if host.vendor %} &middot; {% endif %}<span class="mac">{{ host.mac }}</span>{% endif %}
+            </div>
+            {% endif %}
+            {% if host.ports %}
+            <table>
+              <tr><th>Port</th><th>Service</th><th>Product / version</th></tr>
+              {% for p in host.ports %}
+              <tr>
+                <td class="port">{{ p.port }}/{{ p.protocol }}</td>
+                <td class="svc">{{ p.service or '&ndash;' | safe }}</td>
+                <td class="ver">{{ [p.product, p.version] | select | join(' ') or '&ndash;' | safe }}</td>
+              </tr>
+              {% endfor %}
+            </table>
+            {% elif scan.profile == 'discovery' %}
+            <div class="empty">Discovery scan &middot; ports not checked</div>
+            {% else %}
+            <div class="empty">No open ports in the scanned range</div>
+            {% endif %}
           </div>
-          {% if host.ports %}
-          <table>
-            <tr><th>Port</th><th>Proto</th><th>State</th><th>Service</th><th>Product / Version</th></tr>
-            {% for p in host.ports %}
-            <tr>
-              <td>{{ p.port }}</td>
-              <td>{{ p.protocol }}</td>
-              <td class="state-{{ p.state }}">{{ p.state }}</td>
-              <td>{{ p.service }}</td>
-              <td>{{ p.product }} {{ p.version }}</td>
-            </tr>
-            {% endfor %}
-          </table>
-          {% else %}
-          <div class="empty">No open ports found in scanned range.</div>
-          {% endif %}
-        </div>
         {% endfor %}
+        </div>
       {% else %}
-        <div class="empty">No scan results yet. Click "Scan now" or wait for the next automatic scan.</div>
+        <div class="empty">No scan results yet. Press Scan now or wait for the next automatic scan.</div>
       {% endif %}
-    </div>
+    </section>
   </div>
 
   <div>
-    <div class="panel">
-      <h2>Scan history</h2>
+    <section class="panel">
+      <div class="panel-head"><h2>Scan history</h2></div>
       {% if history %}
+      <div class="history">
         {% for h in history %}
-        <div class="history-row">
-          <span>{{ h.subnet }}</span>
-          <span>{{ h.host_count }} hosts{% if h.profile and h.profile in profiles %} &middot; {{ profiles[h.profile].label }}{% endif %}</span>
-          <span style="color:var(--muted)">{{ h.finished_at or 'running' }}</span>
+        <div class="hrow">
+          <span class="t">{{ h.finished_at | when }}</span>
+          <span class="n">{{ h.host_count }}<small>hosts</small></span>
+          <span class="sub">{{ h.subnet }}</span>
+          <span class="sub sub-r">{% if h.profile and h.profile in profiles %}<span class="tag {{ h.profile }}">{{ profiles[h.profile].label }}</span>{% endif %}</span>
         </div>
         {% endfor %}
+      </div>
       {% else %}
         <div class="empty">No history yet.</div>
       {% endif %}
-    </div>
+    </section>
   </div>
 </div>
 
+</div>
 
 <script>
 // Stop scan: clicking starts a 5-second countdown ("Stopping 5..."); clicking

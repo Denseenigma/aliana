@@ -37,7 +37,9 @@
     padding: 20px;
     background: var(--bg);
     color: var(--text);
-    font-family: ui-monospace, "SF Mono", "Cascadia Code", Consolas, monospace;
+    font-family: "Aliana Sans", "DejaVu Sans Condensed", "Arial Narrow", sans-serif;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 0.03em;
     background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='28' height='48' viewBox='0 0 28 48'%3E%3Cpath d='M14 0 L28 8 L28 24 L14 32 L0 24 L0 8 Z M14 32 L14 48' fill='none' stroke='%23ff7a00' stroke-opacity='0.06'/%3E%3C/svg%3E");
   }
   .wrap { max-width: 720px; margin: 0 auto; }
@@ -160,7 +162,8 @@
     cursor: pointer;
   }
   .net-row:hover { background: #140a03; }
-  .net-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .net-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 1.05rem; }
+  .url, #setup-url { font-family: ui-monospace, Consolas, monospace; letter-spacing: 0; }
   .tag {
     font-size: 0.65rem;
     letter-spacing: 0.1em;

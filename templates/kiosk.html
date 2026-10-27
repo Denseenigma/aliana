@@ -503,41 +503,53 @@
   #seg.blink .on { animation: blink 0.5s steps(1) infinite; }
   #seg.standby .on { fill: var(--line-dim); }
 
-  /* --- Result stamps --- */
+  /* --- Result screen: full-screen flash when a scan ends (Pi screen only) --- */
   .stamp {
+    --c: var(--cyan);
     position: fixed;
-    left: 50%;
-    top: 52%;
+    top: var(--inset-top);
+    right: var(--inset-right);
+    bottom: var(--inset-bottom);
+    left: var(--inset-left);
     z-index: 30;
-    pointer-events: none;
     display: none;
     flex-direction: column;
     align-items: center;
-    padding: 6px 22px 8px;
-    border: 4px double currentColor;
-    background: rgba(0, 0, 0, 0.82);
-    color: var(--green);
-    transform: translate(-50%, -50%) rotate(-8deg);
+    justify-content: center;
+    gap: 6px;
+    background: #000;
+    color: var(--c);
+    pointer-events: none;
   }
-  .stamp.show { display: flex; animation: stamp-in 0.32s cubic-bezier(.2, 1.6, .4, 1) both; }
-  .stamp.hide { display: flex; animation: stamp-out 0.5s ease-in both; }
-  .stamp.stopped, .stamp.failed { color: var(--red); }
+  .stamp.stopped, .stamp.failed { --c: var(--red); }
+  /* hazard bands top and bottom, in the result colour */
+  .stamp::before, .stamp::after {
+    content: "";
+    position: absolute;
+    left: 0; right: 0;
+    height: 18px;
+    background: repeating-linear-gradient(-45deg, var(--c) 0 12px, transparent 12px 24px);
+  }
+  .stamp::before { top: 8px; }
+  .stamp::after { bottom: 8px; }
+  .stamp.show { display: flex; }
+  /* flash: text + bands on, then off, --flashes times; closes after the last */
+  .stamp.show > *, .stamp.show::before, .stamp.show::after {
+    animation: stamp-flash 0.7s steps(1) var(--flashes, 3) both;
+  }
+  @keyframes stamp-flash {
+    0%   { opacity: 1; }
+    65%  { opacity: 0; }
+  }
   .stamp-main {
     font-family: var(--title);
-    font-size: 58px;
-    line-height: 58px;
-    letter-spacing: 0.06em;
-    text-shadow: 0 0 10px currentColor;
+    font-size: 104px;
+    line-height: 96px;
+    letter-spacing: 0.04em;
+    white-space: nowrap;
+    text-shadow: 0 0 12px var(--c);
   }
-  .stamp-sub { font-family: var(--cond); font-size: 13px; letter-spacing: 0.14em; color: var(--text); }
-  @keyframes stamp-in {
-    from { opacity: 0; transform: translate(-50%, -50%) rotate(-8deg) scale(2.2); }
-    to   { opacity: 1; transform: translate(-50%, -50%) rotate(-8deg) scale(1); }
-  }
-  @keyframes stamp-out {
-    from { opacity: 1; }
-    to   { opacity: 0; transform: translate(-50%, -50%) rotate(-8deg) scale(0.92); }
-  }
+  .stamp-sub { font-family: var(--cond); font-size: 17px; letter-spacing: 0.16em; }
 
   /* --- Boot sequence --- */
   .boot {
@@ -1148,6 +1160,8 @@
 
   // ---- Result stamps ----
   var lastSeq = null, stampTimer = null;
+  var STAMP_FLASHES = 3;      // how many times the result screen flashes
+  var STAMP_FLASH_MS = 700;   // one flash (on + off); closes after the last one
   function maybeStamp(data) {
     if (lastSeq === null) { lastSeq = data.outcome_seq; return; }   // no stamp on page load
     if (data.outcome_seq === lastSeq) return;
@@ -1160,16 +1174,18 @@
     } else if (o === "failed") {
       sub = "SEE ERROR BELOW";
     }
-    $("stamp-main").textContent = { complete: "COMPLETE", stopped: "ABORTED", failed: "FAILED" }[o] || "COMPLETE";
+    var word = { complete: "COMPLETE", stopped: "ABORTED", failed: "FAILED" }[o] || "COMPLETE";
+    $("stamp-main").textContent = word;
+    // big as possible while fitting the screen width
+    $("stamp-main").style.fontSize = Math.min(110, Math.floor((window.innerWidth - 130) / (word.length * 0.5))) + "px";
     $("stamp-sub").textContent = sub;
     clearTimeout(stampTimer);
+    st.style.setProperty("--flashes", STAMP_FLASHES);
     st.className = "stamp " + o;
     void st.offsetWidth;                 // restart the animation
     st.className = "stamp show " + o;
-    stampTimer = setTimeout(function () {
-      st.className = "stamp hide " + o;
-      stampTimer = setTimeout(function () { st.className = "stamp"; }, 500);
-    }, 3200);
+    // close right after the last flash
+    stampTimer = setTimeout(function () { st.className = "stamp"; }, STAMP_FLASHES * STAMP_FLASH_MS);
   }
 
   // ---- Boot sequence ----
