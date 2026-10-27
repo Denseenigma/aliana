@@ -233,6 +233,9 @@
   .error-banner { border-radius: 0; background: #1a0000; }
   button.stop { background: var(--danger); }
   button.stop:hover { background: #ff5a5a; }
+  button.stopping { background: #fff; color: var(--danger); animation: stopflash 0.5s steps(1) infinite; }
+  @keyframes stopflash { 50% { opacity: 0.55; } }
+  button.stopping:hover { background: #fff; }
   .nav { display: flex; gap: 4px; margin-left: auto; }
   .nav a {
     color: var(--accent);
@@ -281,8 +284,9 @@
       </select>
     </form>
 
-    <form action="{{ url_for('scan_stop') if status.running else url_for('scan_now') }}" method="post">
-      <button type="submit" class="{{ 'stop' if status.running else '' }}">{{ 'Stop scan' if status.running else 'Scan now' }}</button>
+    <form id="scan-form" action="{{ url_for('scan_stop') if status.running else url_for('scan_now') }}" method="post"
+          data-running="{{ '1' if status.running else '0' }}">
+      <button type="submit" id="scan-btn" class="{{ 'stop' if status.running else '' }}">{{ 'Stop scan' if status.running else 'Scan now' }}</button>
     </form>
   </div>
 </header>
@@ -354,5 +358,56 @@
 </div>
 
 
+<script>
+// Stop scan: clicking starts a 5-second countdown ("Stopping 5..."); clicking
+// again cancels it. Same behaviour as the onboard screen's button.
+(function () {
+  var form = document.getElementById("scan-form");
+  var btn = document.getElementById("scan-btn");
+  if (!form || form.getAttribute("data-running") !== "1") return;
+  var left = null, timer = null;
+
+  function show() {
+    if (left === null) {
+      btn.textContent = "Stop scan";
+      btn.className = "stop";
+    } else {
+      btn.textContent = "Stopping " + left + " \u2014 click to cancel";
+      btn.className = "stopping";
+    }
+  }
+
+  form.addEventListener("submit", function (e) {
+    e.preventDefault();
+    if (left !== null) {            // second click: cancel
+      clearInterval(timer);
+      left = null;
+      show();
+      return;
+    }
+    left = 5;
+    show();
+    timer = setInterval(function () {
+      left -= 1;
+      if (left <= 0) {
+        clearInterval(timer);
+        btn.textContent = "Stopping\u2026";
+        btn.disabled = true;
+        form.submit();              // POST /scan/stop, then back to the dashboard
+      } else {
+        show();
+      }
+    }, 1000);
+  });
+
+  // Refresh the page when the scan finishes, so the results appear
+  setInterval(function () {
+    fetch("/api/status", { cache: "no-store" })
+      .then(function (r) { return r.json(); })
+      .then(function (s) { if (!s.running && !btn.disabled) location.reload(); })
+      .catch(function () {});
+  }, 3000);
+})();
+</script>
 </body>
 </html>
