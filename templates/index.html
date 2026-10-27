@@ -317,6 +317,19 @@
   .host-actions { margin-top: auto; padding-top: 10px; display: flex; align-items: center; gap: 10px; }
   .host-actions .deep-msg { font-size: 0.75rem; letter-spacing: 0.06em; color: var(--muted); }
   .host-actions .deep-msg.err { color: var(--red); }
+  button.excl-btn {
+    background: transparent; color: var(--muted); box-shadow: inset 0 0 0 1px var(--border); clip-path: none;
+    font-family: var(--sans); font-size: 0.75rem; letter-spacing: 0.14em; padding: 6px 12px 5px;
+  }
+  button.excl-btn:hover { background: transparent; color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+  button.excl-btn.armed { color: #000; background: var(--accent); box-shadow: none; }
+  .tag.excluded { background: transparent; color: var(--muted); box-shadow: inset 0 0 0 1px var(--muted); text-decoration: none; }
+  .kv b.warn-o { color: var(--accent); }
+  .guard-banner { border-color: var(--red); color: var(--text); background: #1a0000; display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; }
+  .guard-banner b { color: var(--red); font-weight: inherit; }
+  .guard-banner form { display: inline; }
+  .guard-banner button { font-size: 1.05rem; padding: 7px 20px 5px 14px; background: var(--red); }
+  .guard-banner a { color: var(--accent); }
   button.deep-btn {
     background: transparent; color: var(--red); box-shadow: inset 0 0 0 1px var(--red);
     font-family: var(--sans); font-size: 0.8rem; letter-spacing: 0.14em; padding: 6px 16px 5px 12px;
@@ -462,6 +475,8 @@
     {% if status.running and cur and cur.kind == 'host' %}<span class="kv">Target <b>{{ cur.target }} &middot; {{ profiles[cur.profile].label if cur.profile in profiles else cur.profile }}</b></span>{% endif %}
     {% if status.queue.queued or status.queue.paused %}<a class="kv qlink" href="/queue">Queue <b>{{ status.queue.queued }} waiting{% if status.queue.paused %} &middot; paused{% endif %}</b></a>{% endif %}
     <span class="kv">Last run <b>{{ status.last_run | when }}</b></span>
+    {% if status.guard %}<span class="kv" title="{{ status.guard.message or 'Subnet on the selected interface' }}">Subnet <b class="{{ 'warn' if status.guard.level in ('confirm', 'refuse') else 'warn-o' if status.guard.level == 'warn' else '' }}">{{ status.guard.subnet }} &middot; {{ '{:,}'.format(status.guard.addresses) }}</b></span>{% endif %}
+    {% if status.exclusions %}<a class="kv qlink" href="/settings" title="Never scanned">Excluded <b>{{ status.exclusions | length }}</b></a>{% endif %}
     <span class="kv" title="{{ 'Raw sockets: ARP discovery, SYN scans, OS detection on Deep' if status.mode == 'syn' else 'No raw sockets: TCP connect scans, no OS detection (re-run setup.sh)' }}">Mode <b class="{{ 'ok' if status.mode == 'syn' else 'warn' }}">{{ 'SYN' if status.mode == 'syn' else 'Connect' }}</b></span>
     <a class="kv qlink" href="/settings" title="Change in Settings">Auto-scan <b id="next-auto" data-next="{{ status.next_in if status.next_in is not none else '' }}">{% if not status.auto_scan %}off{% elif status.running %}after this scan{% elif status.next_in is not none %}in {{ (status.next_in // 60) }}:{{ '%02d' % (status.next_in % 60) }}{% else %}scheduled{% endif %}</b></a>
     <span class="spacer"></span>
@@ -505,6 +520,16 @@
 {% endif %}
 {% if status.notice %}
 <div class="error-banner notice">NOTE &middot; {{ status.notice }}</div>
+{% endif %}
+{% if flash_error %}
+<div class="error-banner">COULDN'T START SCAN &middot; {{ flash_error }}</div>
+{% endif %}
+{% if ask_guard and status.guard and status.guard.level == 'confirm' and not status.running %}
+<div class="error-banner guard-banner">
+  <span><b>LARGE NETWORK</b> &middot; {{ status.guard.message }}</span>
+  <form action="{{ url_for('scan_now') }}" method="post"><input type="hidden" name="confirm" value="1"><button type="submit">Scan anyway</button></form>
+  <a href="/">Cancel</a>
+</div>
 {% endif %}
 
 {% if viewing_old %}
@@ -592,10 +617,18 @@
             {% endif %}
             {% if host.ip not in own_ips %}
             {% set qs = status.queue.hosts.get(host.ip) %}
+            {% set ex = excluded.get(host.ip) %}
             <div class="host-actions">
+              {% if ex %}
+              <a class="tag excluded" href="/settings" title="On the exclusion list -- never scanned. Manage in Settings.">Excluded{% if ex.note %} &middot; {{ ex.note }}{% endif %}</a>
+              {% else %}
               <button type="button" class="deep-btn {{ qs or '' }}" data-ip="{{ host.ip }}" {{ 'disabled' if qs else '' }}
                       title="Queue a Deep scan (top 1000 ports, full probing{{ ', OS guess' if status.mode == 'syn' else '' }}) of just this host">
                 {{ 'Scanning…' if qs == 'running' else 'Queued' if qs == 'queued' else 'Deep scan' }}</button>
+              <button type="button" class="excl-btn" data-ip="{{ host.ip }}"
+                      data-note="{{ host.vendor or host.hostname or '' }}"
+                      title="Add this host to the exclusion list: it will never be scanned again (undo in Settings)">Exclude</button>
+              {% endif %}
               <span class="deep-msg"></span>
             </div>
             {% endif %}
@@ -751,6 +784,35 @@
           }
         })
         .catch(function () { btn.disabled = false; btn.textContent = "Deep scan"; });
+    });
+  });
+})();
+
+// "Exclude" on host cards: click once to arm, again within 4 s to add the
+// host to the exclusion list (never scanned again; undo in Settings).
+(function () {
+  document.querySelectorAll(".excl-btn").forEach(function (btn) {
+    var t = null;
+    btn.addEventListener("click", function () {
+      if (!btn.classList.contains("armed")) {
+        btn.classList.add("armed");
+        btn.textContent = "Click to confirm";
+        t = setTimeout(function () { btn.classList.remove("armed"); btn.textContent = "Exclude"; }, 4000);
+        return;
+      }
+      clearTimeout(t);
+      btn.disabled = true;
+      fetch("/api/exclusions/add", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ spec: btn.getAttribute("data-ip"), note: btn.getAttribute("data-note") })
+      })
+        .then(function (r) { return r.json(); })
+        .then(function (d) {
+          if (d.ok) location.reload();
+          else { btn.disabled = false; btn.textContent = "Exclude"; btn.classList.remove("armed");
+                 var m = btn.parentNode.querySelector(".deep-msg"); m.className = "deep-msg err"; m.textContent = d.error; }
+        });
     });
   });
 })();

@@ -132,6 +132,26 @@ every scan; changes save immediately:
   open but never get service-identification probes (default `9999`;
   `ALIANA_NO_PROBE_PORTS` sets the default for a fresh install).
 
+## Safety: exclusions and subnet size guard
+
+Both live on the Settings page and are enforced in the scanner itself, so
+they apply to every way a scan can start (dashboard, Pi screen, Queue page,
+auto-scan).
+
+- **Exclusions** -- IPs, ranges (`172.16.0.10-20` / `172.16.0.10-172.16.0.20`)
+  or CIDR blocks that are never scanned, each with an optional note. Network
+  scans pass them to nmap `--exclude` (no discovery packets, no probes);
+  Deep scans of an excluded host are refused, and queued ones are cancelled
+  when the host is excluded. Host cards have an **Exclude** button (click
+  twice); excluded hosts show an "Excluded" tag instead of scan buttons.
+- **Subnet size guard** -- the subnet on the selected interface is checked
+  before a network scan is queued:
+  - /24 or smaller: scans freely
+  - /23 - /22: scans, with a size warning (dashboard shows the subnet in orange)
+  - /21 - /16: needs confirmation every time ("Scan anyway" on the dashboard,
+    Queue page and Pi screen); **auto-scan skips it** and leaves a note
+  - larger than /16: refused
+
 ## Two-stage scans (no more hangs on silent devices)
 
 Standard and Deep scans run in two stages:

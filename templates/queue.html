@@ -470,9 +470,19 @@
         else flash(d.error || "Couldn't queue that.");
       });
     } else if (b.id === "add-net") {
-      post("/api/queue/subnet", { profile: $("add-profile").value }).then(function (d) {
-        if (d.ok) flash("Queued a " + label(d.job.profile) + " network scan.", true);
-        else flash(d.error || "Couldn't queue that.");
+      // Large subnets (bigger than /22) need a second, explicit click
+      var confirming = b.getAttribute("data-confirm") === "1";
+      post("/api/queue/subnet", { profile: $("add-profile").value, confirm: confirming }).then(function (d) {
+        b.removeAttribute("data-confirm");
+        b.className = "ghost";
+        b.textContent = "Queue network scan";
+        if (d.ok) flash("Queued a " + label(d.job.profile) + " network scan of " + d.job.target + ".", true);
+        else if (d.needs_confirm) {
+          flash("Large network: " + d.error);
+          b.setAttribute("data-confirm", "1");
+          b.className = "red";
+          b.textContent = "Scan " + d.guard.addresses.toLocaleString() + " addresses anyway";
+        } else flash(d.error || "Couldn't queue that.");
       });
     }
   });

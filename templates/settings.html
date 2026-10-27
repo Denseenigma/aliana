@@ -253,6 +253,22 @@
   }
   .chip button:hover { background: var(--red); color: #000; }
   .settings input { width: 210px; }
+  .exlist { display: flex; flex-direction: column; margin-bottom: 14px; }
+  .exrow { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 4px 12px; align-items: center;
+           padding: 8px 0; border-bottom: 1px solid rgba(107, 50, 0, 0.6); }
+  .exrow:last-child { border-bottom: none; }
+  .exrow .spec { font-family: var(--mono); font-size: 1rem; color: var(--text); }
+  .exrow .spec small { font-family: var(--sans); font-size: 0.8rem; letter-spacing: 0.04em; color: var(--muted); margin-left: 10px; }
+  .exrow .n { font-size: 0.75rem; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); }
+  input.note { width: 200px; font-family: var(--sans); letter-spacing: 0.03em; }
+  code { font-family: var(--mono); color: var(--text); }
+  .guard-rows { display: grid; grid-template-columns: auto 1fr; gap: 6px 14px; font-size: 0.88rem; letter-spacing: 0.03em; }
+  .guard-rows .k { font-family: var(--mono); color: var(--text); }
+  .guard-rows .v { color: var(--muted); }
+  .guard-rows .v b { font-weight: inherit; }
+  .lv-ok { color: var(--green) !important; }
+  .lv-warn { color: var(--accent) !important; }
+  .lv-confirm, .lv-refuse { color: var(--red) !important; }
   .saved { color: var(--green); font-size: 0.8rem; letter-spacing: 0.1em; text-transform: uppercase; opacity: 0; transition: opacity 0.3s; }
   .saved.show { opacity: 1; }
 </style>
@@ -307,6 +323,28 @@
     </div>
     <div class="hint">Default: <span id="port-default"></span>. Comma-separate to add several at once.</div>
   </section>
+
+  <section class="panel">
+    <div class="panel-head"><h2>Exclusions</h2><span class="kv" id="ex-kv"></span></div>
+    <p class="desc">Addresses Aliana <b>never scans</b> &mdash; not even a ping. Network scans skip them
+      (nmap <code>--exclude</code>) and Deep scans of them are refused. Enter one IP, a range
+      (<b>172.16.0.10-20</b> or <b>172.16.0.10-172.16.0.20</b>) or a block (<b>172.16.5.0/24</b>), with an
+      optional note. Host cards also have an <b>Exclude</b> button.</p>
+    <div class="exlist" id="exlist"></div>
+    <div class="add">
+      <input id="ex-spec" placeholder="172.16.0.15" autocomplete="off" spellcheck="false">
+      <input id="ex-note" class="note" placeholder="Note (optional)" autocomplete="off">
+      <button type="button" id="ex-add">Add</button>
+    </div>
+  </section>
+
+  <section class="panel">
+    <div class="panel-head"><h2>Subnet size guard</h2></div>
+    <p class="desc">Protects against accidentally scanning a huge network. Applies to every scan &mdash; dashboard,
+      Pi screen, Queue page and auto-scan.</p>
+    <div class="guard-rows" id="guard-rows"></div>
+    <div class="readout" id="guard-now"></div>
+  </section>
 </div>
 
 </div>
@@ -348,7 +386,32 @@
       .catch(function () { flash("Aliana isn't responding."); return false; });
   }
 
+  function renderSafety() {
+    var ex = S.exclusions || [];
+    var total = ex.reduce(function (a, e) { return a + e.count; }, 0);
+    $("ex-kv").innerHTML = ex.length ? "<b>" + total.toLocaleString() + "</b> address" + (total === 1 ? "" : "es") : "";
+    $("exlist").innerHTML = ex.length ? ex.map(function (e) {
+      return '<div class="exrow"><span class="spec">' + esc(e.spec) + (e.note ? "<small>" + esc(e.note) + "</small>" : "") +
+        '</span><span class="n">' + (e.count > 1 ? e.count.toLocaleString() + " addr" : "") + "</span>" +
+        '<button type="button" class="red sm" data-exrm="' + esc(e.spec) + '">Remove</button></div>';
+    }).join("") : '<span class="empty">Nothing excluded &mdash; every address on the subnet can be scanned.</span>';
+
+    var L = S.guard_levels;
+    $("guard-rows").innerHTML =
+      '<span class="k">/' + L.warn + " and smaller</span>" + '<span class="v"><b class="lv-ok">Scans freely</b></span>' +
+      '<span class="k">/' + (L.warn - 1) + " \u2013 /" + L.confirm + "</span>" + '<span class="v"><b class="lv-warn">Scans, with a size warning</b></span>' +
+      '<span class="k">/' + (L.confirm - 1) + " \u2013 /" + L.max + "</span>" + '<span class="v"><b class="lv-confirm">Needs confirmation</b> each time &middot; auto-scan skips it</span>' +
+      '<span class="k">Larger than /' + L.max + "</span>" + '<span class="v"><b class="lv-refuse">Refused</b></span>';
+    var g = S.guard;
+    $("guard-now").innerHTML = g
+      ? "Now on " + esc(S.interface) + ': <b class="lv-' + g.level + '">' + esc(g.subnet) + " &middot; " +
+        g.addresses.toLocaleString() + " addresses &middot; " +
+        { ok: "OK", warn: "Warning", confirm: "Needs confirmation", refuse: "Refused" }[g.level] + "</b>"
+      : "Now on " + esc(S.interface) + ": <b>no IPv4 address</b>";
+  }
+
   function render() {
+    renderSafety();
     $("prof").textContent = S.profile_label;
     var opts = [{ v: "off", label: "Off", on: !S.auto_scan }].concat(S.intervals.map(function (iv) {
       return { v: iv.seconds, label: "Every " + iv.label, on: S.auto_scan && iv.seconds === S.scan_interval };
@@ -384,7 +447,18 @@
       save({ no_probe_ports: S.no_probe_ports.concat(add) }).then(function (ok) { if (ok) $("port-in").value = ""; });
     } else if (b.id === "port-reset") {
       save({ no_probe_ports: S.no_probe_default });
+    } else if (b.hasAttribute("data-exrm")) {
+      var rmx = b.getAttribute("data-exrm");
+      save({ exclusions: S.exclusions.filter(function (e) { return e.spec !== rmx; }) });
+    } else if (b.id === "ex-add") {
+      var spec = $("ex-spec").value.trim();
+      if (!spec) { $("ex-spec").focus(); return; }
+      save({ exclusions: S.exclusions.concat([{ spec: spec, note: $("ex-note").value.trim() }]) })
+        .then(function (ok) { if (ok) { $("ex-spec").value = ""; $("ex-note").value = ""; } });
     }
+  });
+  ["ex-spec", "ex-note"].forEach(function (id) {
+    $(id).addEventListener("keydown", function (e) { if (e.key === "Enter") $("ex-add").click(); });
   });
   $("port-in").addEventListener("keydown", function (e) { if (e.key === "Enter") $("port-add").click(); });
 

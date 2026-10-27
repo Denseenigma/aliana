@@ -73,6 +73,9 @@ def _dashboard(scan_id):
     return render_template(
         "index.html", scan=scan, status=status, history=history, interfaces=interfaces,
         viewing_old=viewing_old,
+        ask_guard=request.args.get("guard") == "1",
+        flash_error=request.args.get("err"),
+        excluded={h["ip"]: scanner.is_excluded(h["ip"]) for h in (scan or {}).get("hosts", [])},
         profiles=scanner.PROFILES,
         intervals=[(sec, _interval_label(sec)) for sec in scanner.INTERVAL_CHOICES],
         own_ips={i["ipv4"].split("/")[0] for i in interfaces if i["ipv4"]},
@@ -82,7 +85,13 @@ def _dashboard(scan_id):
 @app.route("/scan/now", methods=["POST"])
 def scan_now():
     # Run in a background thread so the request returns immediately
-    scanner.enqueue("subnet", source="manual")
+    confirm = request.form.get("confirm") == "1"
+    g = scanner.current_subnet_guard()
+    if g and g["level"] == "confirm" and not confirm:
+        return redirect(url_for("index", guard=1))   # dashboard asks first
+    job, err = scanner.enqueue("subnet", source="manual", confirm_large=confirm)
+    if err:
+        return redirect(url_for("index", err=err))
     time.sleep(0.3)  # let the worker pick it up so the page shows it running
     return redirect(url_for("index"))
 
@@ -174,6 +183,7 @@ def _kiosk_state():
         "outcome": status.get("last_outcome"),
         "outcome_seq": status.get("outcome_seq", 0),
         "last_job": status.get("last_job"),
+        "guard": status.get("guard"),
         "queue": {k: status["queue"][k] for k in ("queued", "paused", "current")},
         "hostname": socket.gethostname(),
         "nmap_version": _get_nmap_version(),
@@ -206,13 +216,24 @@ def api_kiosk():
 def api_scan():
     """Starts a scan. Optional JSON {"profile": ...}: runs that profile and
     remembers it as the default for automatic scans."""
-    profile = (request.get_json(silent=True) or {}).get("profile")
+    data = request.get_json(silent=True) or {}
+    profile, confirm = data.get("profile"), bool(data.get("confirm"))
+    extra = {}
     if not scanner.get_status()["running"]:
-        if profile in scanner.PROFILES:
-            scanner.set_profile(profile)
-        scanner.enqueue("subnet", source="manual")
-        time.sleep(0.3)  # let the worker start it so the response reflects it
-    return jsonify(_kiosk_state())
+        g = scanner.current_subnet_guard()
+        if g and g["level"] == "confirm" and not confirm:
+            extra["needs_confirm"] = g      # Pi screen shows a confirm panel
+        else:
+            if profile in scanner.PROFILES:
+                scanner.set_profile(profile)
+            job, err = scanner.enqueue("subnet", source="manual", confirm_large=confirm)
+            if err:
+                extra["scan_error"] = err
+            else:
+                time.sleep(0.3)  # let the worker start it so the response reflects it
+    state = _kiosk_state()
+    state.update(extra)
+    return jsonify(state)
 
 
 # ---------------------------------------------------------------- settings
@@ -229,7 +250,19 @@ def _settings_state():
         "profile": scanner.get_profile(),
         "profile_label": scanner.PROFILES[scanner.get_profile()]["label"],
         "mode": scanner.scan_mode(),
+        "exclusions": scanner.get_exclusions(),
+        "guard": _safe_guard(),
+        "interface": scanner.get_current_interface(),
+        "guard_levels": {"warn": scanner.GUARD_WARN_PREFIX, "confirm": scanner.GUARD_CONFIRM_PREFIX,
+                         "max": scanner.GUARD_MAX_PREFIX},
     }
+
+
+def _safe_guard():
+    try:
+        return scanner.current_subnet_guard()
+    except ValueError:
+        return None
 
 
 _PORT_TOKEN = re.compile(r"^\d{1,5}(-\d{1,5})?$")
@@ -269,8 +302,24 @@ def api_settings():
             if bad:
                 return jsonify({"ok": False, "error": "Not a valid port or range: " + ", ".join(bad)}), 400
             scanner.set_no_probe_ports(items)
+        if "exclusions" in data:
+            try:
+                scanner.set_exclusions(data["exclusions"])
+            except ValueError as e:
+                return jsonify({"ok": False, "error": str(e)}), 400
         time.sleep(0.1)  # let the auto-scan loop publish a new countdown
     return jsonify({"ok": True, "settings": _settings_state()})
+
+
+@app.route("/api/exclusions/add", methods=["POST"])
+def api_exclusion_add():
+    """JSON {"spec": ip/range/CIDR, "note": "..."} -- e.g. the host card's Exclude button."""
+    data = request.get_json(silent=True) or {}
+    try:
+        items = scanner.add_exclusion(data.get("spec"), data.get("note") or "")
+    except ValueError as e:
+        return jsonify({"ok": False, "error": str(e)}), 400
+    return jsonify({"ok": True, "exclusions": items})
 
 
 # ---------------------------------------------------------------- job queue
@@ -301,10 +350,14 @@ def api_queue_host():
 def api_queue_subnet():
     """JSON {"profile": ...}: queue a network scan (default: saved profile)."""
     data = request.get_json(silent=True) or {}
-    job, err = scanner.enqueue("subnet", profile=data.get("profile"), source="manual")
+    confirm = bool(data.get("confirm"))
+    g = scanner.current_subnet_guard()
+    if g and g["level"] == "confirm" and not confirm:
+        return jsonify({"ok": False, "needs_confirm": True, "guard": g, "error": g["message"]}), 409
+    job, err = scanner.enqueue("subnet", profile=data.get("profile"), source="manual", confirm_large=confirm)
     if err:
         return jsonify({"ok": False, "error": err}), 409
-    return jsonify({"ok": True, "job": job})
+    return jsonify({"ok": True, "job": job, "guard": g})
 
 
 @app.route("/api/queue/<int:job_id>/cancel", methods=["POST"])

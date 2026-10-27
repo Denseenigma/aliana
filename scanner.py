@@ -16,6 +16,7 @@ import re
 import pty
 import select
 import shutil
+import json
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "aliana.db")
 SCAN_INTERFACE = os.environ.get("ALIANA_IFACE", "usb0")
@@ -484,6 +485,140 @@ def set_no_probe_ports(spec):
     return norm
 
 
+# ---------------------------------------------------------------- exclusions
+#
+# Addresses Aliana never scans (passed to nmap --exclude for network scans;
+# host jobs for them are refused). Saved as JSON: [{"spec", "note"}].
+# A spec is one IP, a CIDR block, or a range "a.b.c.10-a.b.c.20" (the nmap
+# short form "a.b.c.10-20" is accepted too).
+
+def parse_exclusion(spec):
+    """Returns (normalised spec, [IPv4Network, ...]) or raises ValueError."""
+    spec = str(spec or "").strip()
+    if not spec:
+        raise ValueError("empty")
+    if "/" in spec:
+        net = ipaddress.IPv4Network(spec, strict=False)
+        return str(net), [net]
+    if "-" in spec:
+        a, b = (x.strip() for x in spec.split("-", 1))
+        first = ipaddress.IPv4Address(a)
+        if "." not in b:                       # "172.16.0.10-20"
+            b = a.rsplit(".", 1)[0] + "." + b
+        last = ipaddress.IPv4Address(b)
+        if last < first:
+            raise ValueError("range end before start")
+        nets = list(ipaddress.summarize_address_range(first, last))
+        return (str(first) if first == last else f"{first}-{last}"), nets
+    ip = ipaddress.IPv4Address(spec)
+    return str(ip), [ipaddress.IPv4Network(f"{ip}/32")]
+
+
+def get_exclusions():
+    """[{"spec", "note", "count"}] -- only valid entries."""
+    try:
+        items = json.loads(_get_setting("exclusions", "[]") or "[]")
+    except ValueError:
+        items = []
+    out = []
+    for it in items:
+        try:
+            norm, nets = parse_exclusion(it.get("spec"))
+        except (ValueError, AttributeError):
+            continue
+        out.append({"spec": norm, "note": (it.get("note") or "").strip()[:80],
+                    "count": sum(n.num_addresses for n in nets)})
+    return out
+
+
+def set_exclusions(items):
+    """Replaces the list. items: [{"spec", "note"}] (or plain spec strings).
+    Raises ValueError naming the first bad spec. Returns the saved list."""
+    clean, seen = [], set()
+    for it in items or []:
+        if isinstance(it, str):
+            it = {"spec": it}
+        try:
+            norm, _ = parse_exclusion(it.get("spec"))
+        except ValueError:
+            raise ValueError(f"Not a valid IP, range or CIDR: {it.get('spec')}")
+        if norm in seen:
+            continue
+        seen.add(norm)
+        clean.append({"spec": norm, "note": str(it.get("note") or "").strip()[:80]})
+    _set_setting("exclusions", json.dumps(clean))
+    # Queued scans of hosts that are now excluded won't run
+    conn = sqlite3.connect(DB_PATH)
+    rows = conn.execute("SELECT id, target FROM jobs WHERE kind = 'host' AND status = 'queued'").fetchall()
+    conn.close()
+    for job_id, target in rows:
+        if is_excluded(target):
+            cancel_job(job_id)
+    return get_exclusions()
+
+
+def add_exclusion(spec, note=""):
+    items = [{"spec": e["spec"], "note": e["note"]} for e in get_exclusions()]
+    items.append({"spec": spec, "note": note})
+    return set_exclusions(items)
+
+
+def _excluded_networks():
+    nets = []
+    for e in get_exclusions():
+        nets += parse_exclusion(e["spec"])[1]
+    return list(ipaddress.collapse_addresses(nets))
+
+
+def is_excluded(ip):
+    """The exclusion entry (dict) covering this address, or None."""
+    try:
+        addr = ipaddress.IPv4Address(str(ip))
+    except ValueError:
+        return None
+    for e in get_exclusions():
+        if any(addr in n for n in parse_exclusion(e["spec"])[1]):
+            return e
+    return None
+
+
+# ---------------------------------------------------------------- subnet size guard
+#
+# Big subnets mean long, noisy scans. Up to /24 scans freely; /23 and /22
+# scan with a warning; anything larger than /22 needs explicit confirmation
+# (and is never scanned automatically); larger than /16 is refused.
+GUARD_WARN_PREFIX = 24      # prefix shorter than this -> warning
+GUARD_CONFIRM_PREFIX = 22   # prefix shorter than this -> needs confirmation
+GUARD_MAX_PREFIX = 16       # prefix shorter than this -> refused
+
+
+def subnet_guard(subnet):
+    """{"subnet", "prefix", "addresses", "level": ok|warn|confirm|refuse, "message"}"""
+    if not subnet:
+        return None
+    net = ipaddress.IPv4Network(subnet, strict=False)
+    n = max(1, net.num_addresses - 2) if net.prefixlen < 31 else net.num_addresses
+    if net.prefixlen < GUARD_MAX_PREFIX:
+        level = "refuse"
+        msg = (f"{net} is {n:,} addresses -- bigger than a /{GUARD_MAX_PREFIX}, which Aliana won't scan. "
+               "Use an interface on a smaller network.")
+    elif net.prefixlen < GUARD_CONFIRM_PREFIX:
+        level = "confirm"
+        msg = (f"{net} is {n:,} addresses. A scan this size takes a long time and generates a lot of "
+               "traffic -- confirm before it starts. Automatic scans skip it.")
+    elif net.prefixlen < GUARD_WARN_PREFIX:
+        level = "warn"
+        msg = f"{net} is {n:,} addresses -- larger than a /24, so scans take longer."
+    else:
+        level = "ok"
+        msg = ""
+    return {"subnet": str(net), "prefix": net.prefixlen, "addresses": n, "level": level, "message": msg}
+
+
+def current_subnet_guard():
+    return subnet_guard(get_local_subnet(get_current_interface()))
+
+
 def get_current_interface():
     """Returns the currently selected scan interface: DB setting if present,
     otherwise falls back to the ALIANA_IFACE env var / 'usb0' default."""
@@ -568,6 +703,9 @@ def _nmap_cmd(profile, subnet, xml_path, privileged):
     cmd += p["args"]
     if privileged:
         cmd += p.get("privileged_args", [])
+    excl = _excluded_networks()
+    if excl:  # never touched: no discovery packets, no port probes
+        cmd += ["--exclude", ",".join(str(n) for n in excl)]
     # -v and --stats-every make nmap report progress as it goes (hosts
     # found, ports discovered, % done), which the kiosk screen shows live.
     return cmd + ["-v", "--stats-every", "2s", "-oX", xml_path, subnet]
@@ -664,6 +802,10 @@ def run_scan(subnet=None, profile=None, scope="subnet", interface=None):
             subnet = get_local_subnet(interface or get_current_interface())
         if not subnet:
             _last_scan_status["last_error"] = "No subnet detected to scan."
+            _last_scan_status["last_outcome"] = "failed"
+            return None
+        if scope == "host" and is_excluded(subnet):
+            _last_scan_status["last_error"] = f"{subnet} is on the exclusion list (Settings) -- not scanned."
             _last_scan_status["last_outcome"] = "failed"
             return None
         profile = profile if profile in PROFILES else get_profile()
@@ -1069,6 +1211,11 @@ def get_status():
     status["next_in"] = next_scan_in()
     status["mode"] = scan_mode()
     status["queue"] = queue_summary()
+    try:
+        status["guard"] = current_subnet_guard()
+    except ValueError:
+        status["guard"] = None
+    status["exclusions"] = get_exclusions()
     return status
 
 
@@ -1115,7 +1262,7 @@ def set_queue_paused(paused):
     _queue_wake.set()
 
 
-def enqueue(kind, target=None, profile=None, source="manual"):
+def enqueue(kind, target=None, profile=None, source="manual", confirm_large=False):
     """Adds a scan job. kind "subnet" (target ignored; scans the selected
     interface's subnet with `profile`, default the saved one) or "host"
     (target = one IPv4 address, Deep profile unless given). Returns
@@ -1129,10 +1276,22 @@ def enqueue(kind, target=None, profile=None, source="manual"):
         except (ipaddress.AddressValueError, ValueError):
             return None, "Not a valid IPv4 address."
         profile = profile if profile in PROFILES else "deep"
+        ex = is_excluded(target)
+        if ex:
+            return None, (f"{target} is on the exclusion list" +
+                          (f" ({ex['note']})" if ex["note"] else "") + " -- remove it in Settings to scan it.")
     else:
-        target = None
         iface = get_current_interface()
         profile = profile if profile in PROFILES else get_profile()
+        # Fix the subnet now, so the size check applies to what will run
+        target = get_local_subnet(iface)
+        if not target:
+            return None, f"No IPv4 address on {iface} -- nothing to scan."
+        g = subnet_guard(target)
+        if g["level"] == "refuse":
+            return None, g["message"]
+        if g["level"] == "confirm" and (source == "auto" or not confirm_large):
+            return None, ("Auto-scan skipped: " if source == "auto" else "Needs confirmation: ") + g["message"]
     conn = _db()
     try:
         c = conn.cursor()
@@ -1269,7 +1428,8 @@ def queue_worker():
             if job["kind"] == "host":
                 scan_id = run_scan(subnet=job["target"], profile=job["profile"], scope="host")
             else:
-                scan_id = run_scan(profile=job["profile"], scope="subnet", interface=job["interface"])
+                scan_id = run_scan(subnet=job["target"], profile=job["profile"], scope="subnet",
+                                   interface=job["interface"])
 
             outcome = _last_scan_status.get("last_outcome")
             info = _last_scan_status.get("last_job") or {}
@@ -1380,7 +1540,10 @@ def background_loop():
                 _last_scan_status["next_run"] = None
                 job, err = enqueue("subnet", source="auto")
                 if err:
-                    time.sleep(5)  # e.g. queue full: try again shortly
+                    # e.g. subnet too big to scan unattended, no address, or
+                    # queue full: say so, and try again on the next cycle
+                    _last_scan_status["notice"] = err
+                    time.sleep(5)
         except Exception:
             traceback.print_exc()
             time.sleep(5)
