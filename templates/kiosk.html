@@ -18,6 +18,12 @@
     font-weight: 100 900;   /* one heavy face; never synthesize bold */
     font-display: block;
   }
+  @font-face {
+    font-family: "Aliana Sans";   /* condensed Inter Bold (SIL OFL 1.1) */
+    src: url("/static/fonts/AlianaSans.otf") format("opentype");
+    font-weight: 100 900;
+    font-display: block;
+  }
   /*
     SCREEN SAFE AREA -- the panel hides a few pixels behind its bezel.
     If anything is still cut off (or there's a gap), adjust these.
@@ -41,8 +47,9 @@
     --green: #50ff50;
     --red: #ff2626;
     --title: "Aliana Title", "Times New Roman", "Liberation Serif", serif;
-    --cond: "DejaVu Sans Condensed", "Liberation Sans Narrow", "Arial Narrow", sans-serif;
-    --mono: "DejaVu Sans Mono", ui-monospace, Consolas, monospace;
+    --cond: "Aliana Sans", "DejaVu Sans Condensed", "Arial Narrow", sans-serif;
+    /* data (IPs, clock, ports) also in Aliana Sans, with fixed-width digits */
+    --mono: "Aliana Sans", "DejaVu Sans Condensed", "Arial Narrow", sans-serif;
   }
   * { box-sizing: border-box; }
   html, body {
@@ -53,6 +60,7 @@
     color: var(--text);
     font-family: var(--cond);
     text-transform: uppercase;
+    font-variant-numeric: tabular-nums;
     user-select: none;
     -webkit-tap-highlight-color: transparent;
   }
@@ -407,8 +415,8 @@
     text-align: left;
   }
   .pick .pick-name { font-family: var(--title); font-size: 30px; line-height: 30px; letter-spacing: 0.03em; }
-  .pick .pick-desc { font-family: var(--cond); font-size: 12px; font-weight: normal; letter-spacing: 0.04em; color: var(--text); }
-  .pick .pick-default { font-family: var(--cond); font-size: 9px; letter-spacing: 0.12em; color: var(--muted); }
+  .pick .pick-desc { font-family: var(--title); font-size: 17px; line-height: 18px; font-weight: normal; letter-spacing: 0.03em; color: var(--text); }
+  .pick .pick-default { font-family: var(--title); font-size: 13px; line-height: 14px; letter-spacing: 0.06em; color: var(--muted); }
   .pick.discovery { color: var(--cyan); border-left-color: var(--cyan); }
   .pick.deep { color: var(--red); border-left-color: var(--red); }
   .pick:active { background: var(--line-dim); }

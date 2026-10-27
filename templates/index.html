@@ -13,6 +13,12 @@
     font-weight: 100 900;   /* one heavy face; never synthesize bold */
     font-display: block;
   }
+  @font-face {
+    font-family: "Aliana Sans";   /* condensed Inter Bold (SIL OFL 1.1) */
+    src: url("/static/fonts/AlianaSans.otf") format("opentype");
+    font-weight: 100 900;
+    font-display: block;
+  }
   :root {
     /* Theme: NERV-terminal inspired -- orange line work on black
        (matches the onboard screen, templates/kiosk.html) */
@@ -266,6 +272,19 @@
     border: 1px solid var(--border);
   }
   .nav a.on { background: var(--accent); color: #000; border-color: var(--accent); }
+
+  /* Secondary face for labels, headings, nav and tags (data stays monospace) */
+  :root { --label: "Aliana Sans", "DejaVu Sans Condensed", "Arial Narrow", sans-serif; }
+  nav a, .nav a, h2, th, dt, .tag, .status-bar, .profile-desc, details summary,
+  .panel h2, .muted, .msg, .link dd, .saved-row, .net-name, button.ghost,
+  .phone, .history-row, .host-card .meta {
+    font-family: var(--label);
+    font-variant-numeric: tabular-nums;
+  }
+  nav a, .nav a { font-size: 0.9rem; letter-spacing: 0.08em; }
+  h2, .panel h2 { font-size: 0.95rem; letter-spacing: 0.1em; }
+  .status-bar, .profile-desc { font-size: 0.95rem; }
+  select { font-family: var(--label); font-size: 0.95rem; }
 </style>
 </head>
 <body>
