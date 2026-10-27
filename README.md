@@ -132,6 +132,29 @@ every scan; changes save immediately:
   open but never get service-identification probes (default `9999`;
   `ALIANA_NO_PROBE_PORTS` sets the default for a fresh install).
 
+## Insights: changes, device types, findings, export
+
+All worked out from what the scans already recorded -- no extra probing
+(`insights.py`).
+
+- **Change alerts** -- each network scan is compared with the previous scan
+  of the same subnet: new devices, devices gone, ports opened/closed (ports
+  only where both scans checked them). The dashboard shows a hexagon
+  "Changes since ..." banner with the details, NEW tags on new hosts and
+  new ports; the Pi screen flashes **ALERT** (instead of COMPLETE) when new
+  devices or newly opened ports turn up, and keeps a CHANGES n chip in its
+  header (red when something new appeared).
+- **Device types** -- a best guess per host (printer, camera, access
+  control, network gear, phone, storage, Windows, Apple, Linux, Raspberry
+  Pi, IoT, VM) from MAC vendor, hostname, open ports and nmap's OS guess,
+  shown as a hex badge on each card (hover for the reason).
+- **Exposure flags** -- services worth a follow-up, by level: high (Telnet,
+  rsh/rlogin), medium (FTP, RDP, VNC, TFTP), low (SNMP, SMB, web admin
+  without HTTPS). Shown on host cards and as a Findings tile.
+- **Export** -- CSV (one row per open port), JSON, and a printable one-page
+  report (`/scan/<id>/report`, "Print / Save as PDF") from the buttons next
+  to the scan title.
+
 ## Safety: exclusions and subnet size guard
 
 Both live on the Settings page and are enforced in the scanner itself, so

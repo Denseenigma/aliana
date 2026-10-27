@@ -3,7 +3,10 @@ app.py - Aliana-lite: a small recon dashboard.
 Runs nmap scans against a subnet (by default, whatever's on usb0) and
 shows the results in a web UI, with history.
 """
+import csv
 import datetime
+import io
+import json
 import re
 import socket
 import subprocess
@@ -12,6 +15,7 @@ import time
 from flask import Flask, render_template, jsonify, redirect, url_for, request, Response
 
 import scanner
+import insights
 import wifi
 import qr
 
@@ -62,7 +66,7 @@ def view_scan(scan_id):
 
 
 def _dashboard(scan_id):
-    scan = scanner.get_scan(scan_id)
+    scan = insights.annotate(scanner.get_scan(scan_id))
     if scan_id is not None and scan is None:
         return redirect(url_for("index"))
     latest_id = scanner.latest_subnet_scan_id()
@@ -184,6 +188,7 @@ def _kiosk_state():
         "outcome_seq": status.get("outcome_seq", 0),
         "last_job": status.get("last_job"),
         "guard": status.get("guard"),
+        "changes": insights.latest_changes_summary(),
         "queue": {k: status["queue"][k] for k in ("queued", "paused", "current")},
         "hostname": socket.gethostname(),
         "nmap_version": _get_nmap_version(),
@@ -234,6 +239,80 @@ def api_scan():
     state = _kiosk_state()
     state.update(extra)
     return jsonify(state)
+
+
+# ---------------------------------------------------------------- export / report
+
+def _scan_or_404(scan_id):
+    scan = insights.annotate(scanner.get_scan(scan_id))
+    if scan is None:
+        return None
+    return scan
+
+
+def _export_name(scan, ext):
+    t = (scan.get("finished_at") or "")[:16].replace(":", "").replace("T", "-")
+    net = (scan.get("subnet") or "scan").replace("/", "_")
+    return f"aliana-{net}-{t}.{ext}"
+
+
+@app.route("/scan/<int:scan_id>/export.csv")
+def export_csv(scan_id):
+    """One row per open port (hosts with none get one row), with device
+    type, flags and change markers."""
+    scan = _scan_or_404(scan_id)
+    if scan is None:
+        return Response("No such scan", status=404)
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(["scan_id", "scan_finished", "subnet", "profile", "ip", "hostname", "mac", "vendor",
+                "device_type", "os_guess", "os_accuracy", "new_host", "port", "protocol", "service",
+                "product", "version", "identification", "new_port", "flags"])
+    for h in scan["hosts"]:
+        base = [scan["id"], scan["finished_at"], scan["subnet"], scan["profile"], h["ip"], h.get("hostname") or "",
+                h.get("mac") or "", h.get("vendor") or "", h["device"]["label"], h.get("os_name") or "",
+                h.get("os_accuracy") or "", "yes" if h["is_new"] else ""]
+        flags = "; ".join(f"{f['label']} ({f['level']})" for f in h["flags"])
+        ports = [p for p in h["ports"] if p["state"] == "open"]
+        if not ports:
+            w.writerow(base + ["", "", "", "", "", "", "", flags])
+        for p in ports:
+            ident = {"skipped": "not probed (skip list)", "timeout": "not identified"}.get(p.get("probe"), "")
+            w.writerow(base + [p["port"], p["protocol"], p.get("service") or "", p.get("product") or "",
+                               p.get("version") or "", ident, "yes" if p.get("is_new") else "", flags])
+    return Response(buf.getvalue(), mimetype="text/csv",
+                    headers={"Content-Disposition": f'attachment; filename="{_export_name(scan, "csv")}"'})
+
+
+@app.route("/scan/<int:scan_id>/export.json")
+def export_json(scan_id):
+    scan = _scan_or_404(scan_id)
+    if scan is None:
+        return jsonify({}), 404
+    return Response(json.dumps(scan, indent=2, default=str), mimetype="application/json",
+                    headers={"Content-Disposition": f'attachment; filename="{_export_name(scan, "json")}"'})
+
+
+@app.route("/scan/<int:scan_id>/report")
+def report(scan_id):
+    """Printable one-page summary: totals, changes, findings, host list."""
+    scan = _scan_or_404(scan_id)
+    if scan is None:
+        return redirect(url_for("index"))
+    findings = []
+    for h in scan["hosts"]:
+        for f in h["flags"]:
+            findings.append({"ip": h["ip"], "hostname": h.get("hostname"), "device": h["device"]["label"], **f})
+    findings.sort(key=lambda f: (insights.LEVEL_ORDER[f["level"]], tuple(int(x) for x in f["ip"].split("."))))
+    types = {}
+    for h in scan["hosts"]:
+        types[h["device"]["label"]] = types.get(h["device"]["label"], 0) + 1
+    open_ports = sum(1 for h in scan["hosts"] for p in h["ports"] if p["state"] == "open")
+    return render_template("report.html", scan=scan, findings=findings, profiles=scanner.PROFILES,
+                           types=sorted(types.items(), key=lambda x: -x[1]), open_ports=open_ports,
+                           generated=datetime.datetime.now().isoformat(), hostname=socket.gethostname(),
+                           exclusions=scanner.get_exclusions(),
+                           hosts_sorted=sorted(scan["hosts"], key=lambda h: tuple(int(x) for x in h["ip"].split("."))))
 
 
 # ---------------------------------------------------------------- settings

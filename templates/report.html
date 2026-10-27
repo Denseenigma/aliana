@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Aliana report &middot; {{ scan.subnet }} &middot; {{ scan.finished_at | when }}</title>
+<style>
+  /* Printable summary: light page so it prints cleanly, Aliana accents. */
+  @font-face { font-family: "Aliana Title"; src: url("/static/fonts/AlianaTitle.otf") format("opentype"); font-display: block; }
+  @font-face { font-family: "Aliana Sans"; src: url("/static/fonts/AlianaSans.otf") format("opentype"); font-display: block; }
+  :root {
+    --ink: #1b1209; --muted: #7a5a3c; --line: #e3cdb4; --accent: #e06a00; --red: #c81e1e; --cyan: #007f8f; --green: #1d7a1d;
+    --title: "Aliana Title", "Times New Roman", serif;
+    --sans: "Aliana Sans", "Arial Narrow", sans-serif;
+    --mono: ui-monospace, "Cascadia Code", Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: #f4efe9; color: var(--ink); font-family: var(--sans); letter-spacing: 0.02em; font-variant-numeric: tabular-nums; }
+  .page { max-width: 900px; margin: 24px auto; background: #fff; padding: 28px 34px 30px; box-shadow: 0 2px 14px rgba(0,0,0,0.08); }
+  .toolbar { max-width: 900px; margin: 18px auto 0; display: flex; gap: 8px; justify-content: flex-end; }
+  .toolbar button, .toolbar a {
+    background: var(--accent); color: #000; border: none; font-family: var(--sans); font-size: 0.85rem;
+    letter-spacing: 0.12em; text-transform: uppercase; padding: 8px 16px; cursor: pointer; text-decoration: none;
+  }
+  .toolbar a { background: transparent; color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+  header { display: flex; align-items: flex-end; gap: 16px; padding-bottom: 14px; position: relative; margin-bottom: 18px; }
+  header::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 6px;
+    background: repeating-linear-gradient(-45deg, var(--accent) 0 7px, transparent 7px 14px); }
+  h1 { margin: 0; font-family: var(--title); font-weight: normal; font-size: 2.3rem; line-height: 1; background: var(--accent);
+       color: #000; padding: 4px 26px 2px 10px; clip-path: polygon(0 0, 100% 0, calc(100% - 14px) 100%, 0 100%); }
+  .sub { font-size: 0.8rem; letter-spacing: 0.16em; text-transform: uppercase; color: var(--muted); }
+  .meta { margin-left: auto; text-align: right; font-size: 0.8rem; line-height: 1.5; color: var(--muted); }
+  .meta b { color: var(--ink); font-weight: inherit; }
+  .boxes { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 20px; }
+  .box { border: 1px solid var(--line); border-top: 4px solid var(--accent); padding: 6px 10px 8px; }
+  .box .k { font-size: 0.7rem; letter-spacing: 0.14em; text-transform: uppercase; color: var(--muted); }
+  .box .v { font-family: var(--title); font-size: 2rem; line-height: 1.1; }
+  .box .v small { font-family: var(--sans); font-size: 0.75rem; letter-spacing: 0.08em; color: var(--muted); margin-left: 6px; }
+  .box.red { border-top-color: var(--red); }
+  h2 { font-family: var(--sans); font-weight: normal; font-size: 0.85rem; letter-spacing: 0.16em; text-transform: uppercase;
+       margin: 22px 0 8px; padding-bottom: 4px; border-bottom: 2px solid var(--ink); }
+  p.none { color: var(--muted); font-size: 0.85rem; margin: 6px 0; }
+  table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
+  th { text-align: left; font-weight: normal; font-size: 0.68rem; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted);
+       padding: 4px 8px 4px 0; border-bottom: 1px solid var(--line); }
+  td { padding: 4px 8px 4px 0; border-bottom: 1px solid #f0e4d6; vertical-align: top; }
+  td.ip, td.mono { font-family: var(--mono); font-size: 0.78rem; white-space: nowrap; }
+  .lvl { display: inline-block; font-size: 0.65rem; letter-spacing: 0.12em; text-transform: uppercase; padding: 1px 6px 0; }
+  .lvl.high { background: var(--red); color: #fff; }
+  .lvl.medium { box-shadow: inset 0 0 0 1px var(--accent); color: var(--accent); }
+  .lvl.low { box-shadow: inset 0 0 0 1px var(--line); color: var(--muted); }
+  .chg { display: grid; grid-template-columns: repeat(2, 1fr); gap: 0 24px; font-size: 0.82rem; }
+  .chg div { padding: 2px 0; }
+  .chg b { display: inline-block; width: 64px; font-weight: normal; font-size: 0.68rem; letter-spacing: 0.12em; }
+  .chg b.new { color: var(--cyan); } .chg b.gone { color: var(--accent); } .chg b.opened { color: var(--red); } .chg b.closed { color: var(--muted); }
+  .types { display: flex; flex-wrap: wrap; gap: 6px; }
+  .types span { font-size: 0.78rem; padding: 2px 8px; border: 1px solid var(--line); }
+  .types b { font-family: var(--title); font-weight: normal; margin-left: 4px; }
+  .ports { font-family: var(--mono); font-size: 0.74rem; color: var(--muted); }
+  .new { color: var(--cyan); font-size: 0.65rem; letter-spacing: 0.12em; text-transform: uppercase; margin-left: 4px; }
+  footer { margin-top: 22px; font-size: 0.7rem; color: var(--muted); letter-spacing: 0.06em; border-top: 1px solid var(--line); padding-top: 8px; }
+  @media print {
+    body { background: #fff; }
+    .toolbar { display: none; }
+    .page { margin: 0; max-width: none; box-shadow: none; padding: 0; }
+    tr, .chg div { break-inside: avoid; }
+    @page { margin: 14mm; }
+  }
+</style>
+</head>
+<body>
+<div class="toolbar">
+  <a href="{{ url_for('view_scan', scan_id=scan.id) }}">Back to dashboard</a>
+  <button type="button" onclick="window.print()">Print / Save as PDF</button>
+</div>
+<div class="page">
+  <header>
+    <div>
+      <h1>Aliana</h1>
+      <div class="sub" style="margin-top:6px">Network scan report</div>
+    </div>
+    <div class="meta">
+      Network <b>{{ scan.subnet }}</b><br>
+      Scan <b>{{ profiles[scan.profile].label if scan.profile in profiles else scan.profile }}</b>
+      {% if scan.mode %}&middot; <b>{{ 'SYN' if scan.mode == 'syn' else 'Connect' }}</b>{% endif %}<br>
+      Finished <b>{{ scan.finished_at | when }}</b> &middot; scanned by <b>{{ hostname }}</b>
+    </div>
+  </header>
+
+  <div class="boxes">
+    <div class="box"><div class="k">Hosts up</div><div class="v">{{ scan.host_count }}</div></div>
+    <div class="box"><div class="k">Open ports</div><div class="v">{{ open_ports if scan.profile != 'discovery' else '&ndash;' | safe }}</div></div>
+    <div class="box {{ 'red' if scan.flag_counts.high else '' }}"><div class="k">Findings</div><div class="v">{{ scan.flag_total }}<small>{{ scan.flag_counts.high }} high &middot; {{ scan.flag_counts.medium }} med &middot; {{ scan.flag_counts.low }} low</small></div></div>
+    <div class="box"><div class="k">Changes</div><div class="v">{{ scan.changes.count if scan.changes else '&ndash;' | safe }}<small>{% if scan.changes %}vs {{ scan.changes.previous.finished_at | when }}{% else %}no earlier scan{% endif %}</small></div></div>
+  </div>
+
+  <h2>Changes since the previous scan</h2>
+  {% set ch = scan.changes %}
+  {% if not ch %}
+    <p class="none">No earlier scan of this network to compare with.</p>
+  {% elif not ch.count %}
+    <p class="none">No changes since {{ ch.previous.finished_at | when }}.</p>
+  {% else %}
+    <div class="chg">
+      {% for h in ch.new_hosts %}<div><b class="new">NEW</b> {{ h.ip }}{% if h.hostname %} &middot; {{ h.hostname }}{% endif %}{% if h.vendor %} &middot; {{ h.vendor }}{% endif %}</div>{% endfor %}
+      {% for h in ch.missing_hosts %}<div><b class="gone">GONE</b> {{ h.ip }}{% if h.hostname %} &middot; {{ h.hostname }}{% endif %}{% if h.vendor %} &middot; {{ h.vendor }}{% endif %}</div>{% endfor %}
+      {% for o in ch.opened %}<div><b class="opened">OPENED</b> {{ o.ip }} &middot; {{ o.port }}/{{ o.protocol }}</div>{% endfor %}
+      {% for o in ch.closed %}<div><b class="closed">CLOSED</b> {{ o.ip }} &middot; {{ o.port }}/{{ o.protocol }}</div>{% endfor %}
+    </div>
+  {% endif %}
+
+  <h2>Findings</h2>
+  {% if findings %}
+  <table>
+    <tr><th>Level</th><th>Host</th><th>Device</th><th>Finding</th><th>Port</th><th>Why it matters</th></tr>
+    {% for f in findings %}
+    <tr>
+      <td><span class="lvl {{ f.level }}">{{ f.level }}</span></td>
+      <td class="ip">{{ f.ip }}{% if f.hostname %}<br><span class="ports">{{ f.hostname }}</span>{% endif %}</td>
+      <td>{{ f.device }}</td>
+      <td>{{ f.label }}</td>
+      <td class="mono">{{ f.ports | join(', ') }}</td>
+      <td>{{ f.detail }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% else %}
+    <p class="none">No exposure flags{% if scan.profile == 'discovery' %} (Discovery scans don't check ports){% endif %}.</p>
+  {% endif %}
+
+  <h2>Device types</h2>
+  <div class="types">{% for label, n in types %}<span>{{ label }}<b>{{ n }}</b></span>{% endfor %}</div>
+
+  <h2>Hosts</h2>
+  <table>
+    <tr><th>IP</th><th>Name</th><th>Vendor / MAC</th><th>Type</th><th>OS guess</th><th>Open ports</th></tr>
+    {% for h in hosts_sorted %}
+    <tr>
+      <td class="ip">{{ h.ip }}{% if h.is_new %}<span class="new">new</span>{% endif %}</td>
+      <td>{{ h.hostname or '' }}</td>
+      <td>{{ h.vendor or '' }}{% if h.mac %}<br><span class="ports">{{ h.mac }}</span>{% endif %}</td>
+      <td>{{ h.device.label }}</td>
+      <td>{% if h.os_name %}{{ h.os_name }}{% if h.os_accuracy %} ({{ h.os_accuracy }}%){% endif %}{% endif %}</td>
+      <td class="ports">{% for p in h.ports if p.state == 'open' %}{{ p.port }}{% if p.service %}/{{ p.service }}{% endif %}{{ ', ' if not loop.last }}{% endfor %}</td>
+    </tr>
+    {% endfor %}
+  </table>
+
+  <footer>
+    Device types are best guesses from MAC vendor, hostname, open ports and OS fingerprint. Findings are based only on
+    the ports and services this scan recorded &mdash; no additional testing was done.
+    {% if exclusions %}{{ exclusions | length }} address range{{ 's' if exclusions | length != 1 }} excluded from scanning.{% endif %}
+    Generated {{ generated | when }} by Aliana.
+  </footer>
+</div>
+</body>
+</html>

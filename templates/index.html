@@ -222,6 +222,54 @@
 
   /* ---------- Stat tiles ---------- */
   .tiles { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-bottom: 18px; }
+  .tile.hot { border-color: var(--red); }
+  .tile.hot .label { background: var(--red); }
+  .tile .num small { font-family: var(--sans); font-size: 0.8rem; letter-spacing: 0.1em; color: var(--red); margin-left: 8px; text-transform: uppercase; }
+  .exports { display: flex; gap: 4px; }
+  .exports a { color: var(--accent); text-decoration: none; font-size: 0.75rem; letter-spacing: 0.14em; text-transform: uppercase; padding: 3px 9px 2px; box-shadow: inset 0 0 0 1px var(--border); }
+  .exports a:hover { background: var(--accent); color: #000; }
+  /* Change alerts */
+  .changes { border: 1px solid var(--accent); background: #140800; margin: -6px 0 16px; }
+  .changes summary { list-style: none; cursor: pointer; display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; padding: 8px 12px; }
+  .changes summary::-webkit-details-marker { display: none; }
+  .hex-alert {
+    width: 30px; height: 26px; display: inline-flex; align-items: center; justify-content: center;
+    background: var(--accent); color: #000; font-family: var(--title); font-size: 1.2rem;
+    clip-path: polygon(25% 0, 75% 0, 100% 50%, 75% 100%, 25% 100%, 0 50%);
+    animation: blink 1.2s steps(1) infinite;
+  }
+  .ch-title { font-family: var(--title); font-size: 1.25rem; color: var(--accent); text-transform: uppercase; }
+  .ch { font-size: 0.75rem; letter-spacing: 0.12em; text-transform: uppercase; padding: 2px 8px 1px; box-shadow: inset 0 0 0 1px var(--muted); color: var(--text); }
+  .ch.new { background: var(--cyan); color: #000; box-shadow: none; }
+  .ch.gone { box-shadow: inset 0 0 0 1px var(--accent); color: var(--accent); }
+  .ch.opened { background: var(--red); color: #000; box-shadow: none; }
+  .ch-prev { margin-left: auto; color: var(--muted); font-size: 0.75rem; letter-spacing: 0.1em; text-transform: uppercase; }
+  .changes ul { margin: 0; padding: 4px 12px 10px 54px; list-style: none; columns: 2 260px; font-size: 0.88rem; }
+  .changes li { padding: 2px 0; break-inside: avoid; }
+  .changes li b { display: inline-block; width: 64px; font-weight: inherit; font-size: 0.72rem; letter-spacing: 0.12em; color: var(--muted); }
+  .changes li b.new { color: var(--cyan); }
+  .changes li b.gone { color: var(--accent); }
+  .changes li b.opened { color: var(--red); }
+  .ch-note { padding: 0 12px 10px 54px; font-size: 0.75rem; color: var(--muted); letter-spacing: 0.05em; }
+  .no-changes { margin: -6px 0 16px; font-size: 0.8rem; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); }
+  /* Device type badge */
+  .hexb {
+    align-self: center; width: 38px; height: 32px; flex-shrink: 0;
+    display: inline-flex; align-items: center; justify-content: center;
+    background: var(--accent); color: #000; font-family: var(--sans); font-size: 0.7rem; letter-spacing: 0.06em;
+    clip-path: polygon(25% 0, 75% 0, 100% 50%, 75% 100%, 25% 100%, 0 50%);
+  }
+  .hexb.t-access, .hexb.t-camera { background: var(--red); }
+  .hexb.t-network { background: var(--cyan); }
+  .hexb.t-unknown { background: var(--border); color: var(--text); }
+  .host .dtype { color: var(--text); }
+  .tag.new { background: var(--cyan); }
+  .flags { display: flex; flex-wrap: wrap; gap: 4px; margin: -2px 0 8px; }
+  .flag { font-size: 0.7rem; letter-spacing: 0.12em; text-transform: uppercase; padding: 2px 7px 1px; cursor: help; }
+  .flag.high { background: var(--red); color: #000; }
+  .flag.medium { color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+  .flag.low { color: var(--muted); box-shadow: inset 0 0 0 1px var(--border); }
+  .pnew { margin-left: 6px; font-family: var(--sans); font-size: 0.65rem; letter-spacing: 0.12em; text-transform: uppercase; color: #000; background: var(--red); padding: 1px 4px 0; }
   @media (max-width: 700px) { .tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
   .tile {
     border: 1px solid var(--accent);
@@ -545,6 +593,11 @@
           {% if scan.profile and scan.profile in profiles %}<span class="tag {{ scan.profile }}">{{ profiles[scan.profile].label }}</span>{% endif %}
           {% if scan.mode %}<span class="tag outline">{{ 'SYN' if scan.mode == 'syn' else 'Connect' }}</span>{% endif %}
           <span class="kv">{{ scan.subnet }} <b>{{ scan.finished_at | when }}</b></span>
+          <span class="exports">
+            <a href="{{ url_for('export_csv', scan_id=scan.id) }}" title="Download this scan as a spreadsheet (one row per open port)">CSV</a>
+            <a href="{{ url_for('export_json', scan_id=scan.id) }}" title="Download this scan as JSON">JSON</a>
+            <a href="{{ url_for('report', scan_id=scan.id) }}" target="_blank" title="Printable one-page summary">Report</a>
+          </span>
         {% endif %}
       </div>
 
@@ -554,9 +607,32 @@
         <div class="tiles">
           <div class="tile"><span class="label">Hosts up</span><div class="num glow">{{ scan.host_count }}</div></div>
           <div class="tile"><span class="label">Open ports</span><div class="num glow">{{ ns.open if scan.profile != 'discovery' else '&ndash;' | safe }}</div></div>
-          <div class="tile"><span class="label">Subnet</span><div class="num small">{{ scan.subnet }}</div></div>
+          <div class="tile {{ 'hot' if scan.flag_counts.high else 'warm' if scan.flag_counts.medium else '' }}" title="Exposure flags: services worth a follow-up"><span class="label">Findings</span><div class="num glow">{{ scan.flag_total }}{% if scan.flag_counts.high %}<small>{{ scan.flag_counts.high }} high</small>{% endif %}</div></div>
           <div class="tile"><span class="label">Finished</span><div class="num small">{{ scan.finished_at | ago }}</div></div>
         </div>
+        {% set ch = scan.changes %}
+        {% if ch and ch.count %}
+        <details class="changes" {{ 'open' if ch.count <= 6 else '' }}>
+          <summary>
+            <span class="hex-alert" aria-hidden="true">!</span>
+            <span class="ch-title">Changes since {{ ch.previous.finished_at | when }}</span>
+            {% if ch.new_hosts %}<span class="ch new">{{ ch.new_hosts | length }} new device{{ 's' if ch.new_hosts | length != 1 }}</span>{% endif %}
+            {% if ch.missing_hosts %}<span class="ch gone">{{ ch.missing_hosts | length }} gone</span>{% endif %}
+            {% if ch.opened %}<span class="ch opened">{{ ch.opened | length }} port{{ 's' if ch.opened | length != 1 }} opened</span>{% endif %}
+            {% if ch.closed %}<span class="ch">{{ ch.closed | length }} closed</span>{% endif %}
+            <a class="ch-prev" href="{{ url_for('view_scan', scan_id=ch.previous.id) }}">previous scan</a>
+          </summary>
+          <ul>
+            {% for h in ch.new_hosts %}<li><b class="new">NEW</b> {{ h.ip }}{% if h.hostname %} &middot; {{ h.hostname }}{% endif %}{% if h.vendor %} &middot; {{ h.vendor }}{% endif %}</li>{% endfor %}
+            {% for h in ch.missing_hosts %}<li><b class="gone">GONE</b> {{ h.ip }}{% if h.hostname %} &middot; {{ h.hostname }}{% endif %}{% if h.vendor %} &middot; {{ h.vendor }}{% endif %}</li>{% endfor %}
+            {% for o in ch.opened %}<li><b class="opened">OPENED</b> {{ o.ip }} &middot; {{ o.port }}/{{ o.protocol }}</li>{% endfor %}
+            {% for o in ch.closed %}<li><b>CLOSED</b> {{ o.ip }} &middot; {{ o.port }}/{{ o.protocol }}</li>{% endfor %}
+          </ul>
+          {% if not ch.ports_compared %}<div class="ch-note">Ports not compared: the previous scan didn't check the same ports.</div>{% endif %}
+        </details>
+        {% elif ch %}
+        <div class="no-changes">No changes since {{ ch.previous.finished_at | when }}</div>
+        {% endif %}
       {% endif %}
 
       {% if scan and scan.hosts %}
@@ -565,7 +641,9 @@
           {% set open_ports = host.ports | selectattr('state', 'equalto', 'open') | list %}
           <div class="host">
             <div class="host-top">
+              <span class="hexb t-{{ host.device.type }}" title="{{ host.device.label }} -- guess from {{ host.device.why }}">{{ host.device.code }}</span>
               <span class="ip">{{ host.ip }}</span>
+              {% if host.is_new %}<span class="tag new" title="Not seen in the previous scan">New</span>{% endif %}
               {% if host.hostname %}<span class="name">{{ host.hostname }}</span>{% endif %}
               {% set carried = host.earlier | selectattr('state', 'equalto', 'unchecked') | list %}
               {% set closed = host.earlier | selectattr('state', 'equalto', 'closed') | list %}
@@ -582,7 +660,13 @@
               {% if host.ip in own_ips %}<span class="tag">THIS UNIT</span>
               {% elif host.mac %}{% if host.vendor %}{{ host.vendor }} &middot; {% endif %}<span class="mac">{{ host.mac }}</span>
               {% else %}<span class="mac">MAC &ndash;</span>{% endif %}
+              &middot; <span class="dtype">{{ host.device.label }}</span>
             </div>
+            {% if host.flags %}
+            <div class="flags">
+              {% for f in host.flags %}<span class="flag {{ f.level }}" title="{{ f.detail }} (port {{ f.ports | join(', ') }})">{{ f.label }}</span>{% endfor %}
+            </div>
+            {% endif %}
             {% if host.os_name %}
             <div class="os" title="nmap OS fingerprint guess{% if host.os_type %} &middot; {{ host.os_type }}{% endif %}">
               <span class="os-k">OS</span> {{ host.os_name }}{% if host.os_accuracy %} <span class="os-acc {{ 'lo' if host.os_accuracy < 90 else '' }}">{{ host.os_accuracy }}%</span>{% endif %}{% if host.os_type %} <span class="os-type">&middot; {{ host.os_type }}</span>{% endif %}
@@ -593,7 +677,7 @@
               <tr><th>Port</th><th>Service</th><th>Product / version</th></tr>
               {% for p in host.ports %}
               <tr class="{{ 'unprobed' if p.probe else '' }}">
-                <td class="port">{{ p.port }}/{{ p.protocol }}</td>
+                <td class="port">{{ p.port }}/{{ p.protocol }}{% if p.is_new %}<span class="pnew" title="Opened since the previous scan">new</span>{% endif %}</td>
                 <td class="svc">{{ p.service or '&ndash;' | safe }}{% if p.probe %}<span class="q" title="Name from nmap's port list, not confirmed">?</span>{% endif %}</td>
                 <td class="ver">{% if p.probe == 'skipped' %}<span class="probe-note" title="Port is on the never-probe list (ALIANA_NO_PROBE_PORTS)">Not probed &middot; skip list</span>
                   {% elif p.probe == 'timeout' %}<span class="probe-note" title="Port is open, but identification didn't finish: no answer before the time cap, or it was stopped">Not identified</span>

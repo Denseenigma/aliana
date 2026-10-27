@@ -138,6 +138,8 @@
   }
   .qtick[hidden] { display: none; }
   .qtick small { font-family: var(--cond); font-size: 9px; letter-spacing: 0.1em; margin-right: 3px; }
+  .qtick.atick { background: transparent; color: var(--orange); box-shadow: inset 0 0 0 1px var(--orange); }
+  .qtick.atick.hot { background: var(--red); color: #000; box-shadow: none; }
   .qtick.held { background: transparent; color: var(--muted); box-shadow: inset 0 0 0 1px var(--line-dim); }
   #clock {
     display: flex;
@@ -283,6 +285,9 @@
   }
   .chip span { color: var(--green); margin-left: 5px; }
   .feed .muted { color: var(--muted); }
+  .feed-title .chg { float: right; color: var(--orange); }
+  .feed-title .chg .cnew { color: var(--cyan); }
+  .feed-title .chg .copen { color: var(--red); }
   .feed .error { color: var(--red); text-transform: none; }
 
   /* Controls */
@@ -574,6 +579,7 @@
     pointer-events: none;
   }
   .stamp.stopped, .stamp.failed { --c: var(--red); }
+  .stamp.alert { --c: var(--orange); }
   /* hazard bands top and bottom, in the result colour */
   .stamp::before, .stamp::after {
     content: "";
@@ -682,6 +688,7 @@
   </div>
   <div class="hazard"></div>
   <div class="iface"><span class="dot" id="iface-dot"></span><b id="iface-name">&mdash;</b> <span id="iface-ip"></span></div>
+  <div class="qtick atick" id="atick" hidden></div>
   <div class="qtick" id="qtick" hidden></div>
   <div id="clock">--:--</div>
 </header>
@@ -823,6 +830,12 @@
     if (qt.innerHTML !== qText) qt.innerHTML = qText;   // only touch the DOM on change (SPI screen)
     qt.hidden = !q.queued;
     qt.className = "qtick" + (q.paused ? " held" : "");
+    // Changes since the previous network scan (details on the dashboard)
+    var c = s.changes, at = $("atick");
+    var aText = c && c.count ? "<small>CHANGES</small>" + c.count : "";
+    if (at.innerHTML !== aText) at.innerHTML = aText;
+    at.hidden = !aText;
+    at.className = "qtick atick" + (c && (c.new || c.opened) ? " hot" : "");
     $("iface-name").textContent = s.interface || "—";
     $("iface-ip").textContent = s.interface_ip ? s.interface_ip.split("/")[0] : "no IP";
     $("iface-dot").className = "dot" + (s.interface_ip ? " up" : "");
@@ -900,7 +913,15 @@
       html = '<div class="feed-title">Error</div><div class="error">' + esc(s.error) + "</div>";
     } else if (latest) {
       seenRecent = {};
-      html = '<div class="feed-title">Top services — ' + (latest.profile ? esc(latest.profile) + " — " : "") + esc(latest.subnet) + "</div>";
+      var cs = s.changes, cbits = [];
+      if (cs && cs.count) {
+        if (cs.new) cbits.push('<span class="cnew">' + cs.new + " NEW</span>");
+        if (cs.missing) cbits.push(cs.missing + " GONE");
+        if (cs.opened) cbits.push('<span class="copen">' + cs.opened + " OPENED</span>");
+        if (cs.closed) cbits.push(cs.closed + " CLOSED");
+      }
+      html = '<div class="feed-title">Top services — ' + (latest.profile ? esc(latest.profile) + " — " : "") + esc(latest.subnet) +
+        (cbits.length ? '<span class="chg">' + cbits.join(" · ") + "</span>" : "") + "</div>";
       if (latest.services.length) {
         html += '<div class="chips">' + latest.services.map(function (sv) {
           return '<div class="chip">' + esc(sv.name) + "<span>" + sv.count + "</span></div>";
@@ -1322,8 +1343,16 @@
     if (data.outcome_seq === lastSeq) return;
     lastSeq = data.outcome_seq;
     var o = data.outcome || "complete", st = $("stamp"), sub = "";
-    var lj = data.last_job || {};
-    if (o === "complete" && lj.scope === "host") {
+    var lj = data.last_job || {}, chg = data.changes;
+    var alertWorthy = o === "complete" && lj.scope !== "host" && chg && (chg.new || chg.opened);
+    if (alertWorthy) {
+      // something new turned up: new devices or newly opened ports
+      var bits = [];
+      if (chg.new) bits.push(chg.new + " NEW DEVICE" + (chg.new > 1 ? "S" : ""));
+      if (chg.opened) bits.push(chg.opened + " PORT" + (chg.opened > 1 ? "S" : "") + " OPENED");
+      if (chg.missing) bits.push(chg.missing + " GONE");
+      sub = bits.join(" · ");
+    } else if (o === "complete" && lj.scope === "host") {
       sub = "HOST " + lj.target + " · " + (lj.hosts ? lj.open_ports + " OPEN PORTS" : "NO RESPONSE");
     } else if (o === "complete" && data.latest) {
       sub = data.latest.hosts + " HOSTS · " + data.latest.open_ports + " OPEN PORTS";
@@ -1332,16 +1361,17 @@
     } else if (o === "failed") {
       sub = "SEE ERROR BELOW";
     }
-    var word = { complete: "COMPLETE", stopped: "ABORTED", failed: "FAILED" }[o] || "COMPLETE";
+    var word = alertWorthy ? "ALERT" : ({ complete: "COMPLETE", stopped: "ABORTED", failed: "FAILED" }[o] || "COMPLETE");
     $("stamp-main").textContent = word;
     // big as possible while fitting the screen width
     $("stamp-main").style.fontSize = Math.min(110, Math.floor((window.innerWidth - 130) / (word.length * 0.5))) + "px";
     $("stamp-sub").textContent = sub;
     clearTimeout(stampTimer);
     st.style.setProperty("--flashes", STAMP_FLASHES);
-    st.className = "stamp " + o;
+    var cls = alertWorthy ? "alert" : o;
+    st.className = "stamp " + cls;
     void st.offsetWidth;                 // restart the animation
-    st.className = "stamp show " + o;
+    st.className = "stamp show " + cls;
     // close right after the last flash
     stampTimer = setTimeout(function () { st.className = "stamp"; }, STAMP_FLASHES * STAMP_FLASH_MS);
   }
