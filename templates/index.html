@@ -231,6 +231,8 @@
   .state-open { color: var(--green); }
   .history-row { border-bottom-color: var(--border); }
   .error-banner { border-radius: 0; background: #1a0000; }
+  button.stop { background: var(--danger); }
+  button.stop:hover { background: #ff5a5a; }
   .nav { display: flex; gap: 4px; margin-left: auto; }
   .nav a {
     color: var(--accent);
@@ -279,8 +281,8 @@
       </select>
     </form>
 
-    <form action="{{ url_for('scan_now') }}" method="post">
-      <button type="submit" {{ 'disabled' if status.running else '' }}>Scan now</button>
+    <form action="{{ url_for('scan_stop') if status.running else url_for('scan_now') }}" method="post">
+      <button type="submit" class="{{ 'stop' if status.running else '' }}">{{ 'Stop scan' if status.running else 'Scan now' }}</button>
     </form>
   </div>
 </header>

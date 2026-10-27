@@ -34,6 +34,12 @@ def scan_now():
     return redirect(url_for("index"))
 
 
+@app.route("/scan/stop", methods=["POST"])
+def scan_stop():
+    scanner.stop_scan()
+    return redirect(url_for("index"))
+
+
 @app.route("/interface/set", methods=["POST"])
 def set_interface():
     name = request.form.get("interface")
@@ -46,6 +52,12 @@ def set_interface():
 def kiosk():
     """Condensed 480x320 control screen for the Pi's onboard display."""
     return render_template("kiosk.html")
+
+
+def _scannable(interfaces, current):
+    """Interfaces worth cycling through: ones with an IPv4 address (a
+    subnet to scan), plus the current one so it's always in the list."""
+    return [i["name"] for i in interfaces if i["ipv4"] or i["name"] == current]
 
 
 def _kiosk_state():
@@ -61,9 +73,9 @@ def _kiosk_state():
         "error": status["last_error"],
         "interface": current,
         "interface_ip": iface_ip,
-        "interfaces": [i["name"] for i in interfaces],
+        "interfaces": _scannable(interfaces, current),
         "next_in": next_in,
-        "interval": scanner.SCAN_INTERVAL_SECONDS,
+        "interval": status.get("next_total") or scanner.SCAN_INTERVAL_SECONDS,
         "progress": scanner.get_progress(),
         "latest": scanner.get_latest_summary(),
     }
@@ -82,12 +94,19 @@ def api_scan():
     return jsonify(_kiosk_state())
 
 
+@app.route("/api/scan/stop", methods=["POST"])
+def api_scan_stop():
+    scanner.stop_scan()
+    return jsonify(_kiosk_state())
+
+
 @app.route("/api/interface/next", methods=["POST"])
 def api_interface_next():
-    """Cycles the scan interface to the next one (kiosk button)."""
-    names = [i["name"] for i in scanner.list_interfaces()]
-    if names:
-        current = scanner.get_current_interface()
+    """Cycles the scan interface to the next one (kiosk button). Ignored
+    while a scan is running -- stop it first."""
+    current = scanner.get_current_interface()
+    names = _scannable(scanner.list_interfaces(), current)
+    if len(names) > 1 and not scanner.get_status()["running"]:
         idx = names.index(current) if current in names else -1
         scanner.set_current_interface(names[(idx + 1) % len(names)])
     return jsonify(_kiosk_state())

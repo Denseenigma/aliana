@@ -18,8 +18,16 @@ import select
 DB_PATH = os.path.join(os.path.dirname(__file__), "aliana.db")
 SCAN_INTERFACE = os.environ.get("ALIANA_IFACE", "usb0")
 SCAN_INTERVAL_SECONDS = int(os.environ.get("ALIANA_SCAN_INTERVAL", "300"))  # 5 min default
+# Wait this long after startup before the first automatic scan, so the Pi
+# (and its network links) can settle after boot
+FIRST_SCAN_DELAY_SECONDS = int(os.environ.get("ALIANA_FIRST_SCAN_DELAY", "60"))
 
 _scan_lock = threading.Lock()
+_stop_requested = threading.Event()
+
+
+class ScanStopped(Exception):
+    pass
 _last_scan_status = {"running": False, "last_run": None, "last_error": None, "next_run": None}
 
 # Live info about the scan in progress, filled in from nmap's verbose output
@@ -113,6 +121,13 @@ def _run_nmap_live(cmd, timeout):
     tail = []
     try:
         while True:
+            if _stop_requested.is_set():
+                proc.terminate()
+                try:
+                    proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                raise ScanStopped()
             if time.time() > deadline:
                 proc.kill()
                 raise subprocess.TimeoutExpired(cmd, timeout)
@@ -295,6 +310,7 @@ def run_scan(subnet=None, fast=True):
         return None  # a scan is already running
 
     try:
+        _stop_requested.clear()
         _last_scan_status["running"] = True
         if subnet is None:
             subnet = get_local_subnet(get_current_interface())
@@ -331,6 +347,10 @@ def run_scan(subnet=None, fast=True):
         _last_scan_status["last_error"] = None
         return scan_id
 
+    except ScanStopped:
+        # Stopped by the user: nothing to save, and not an error
+        _last_scan_status["last_error"] = None
+        return None
     except subprocess.TimeoutExpired:
         _last_scan_status["last_error"] = "nmap timed out after 10 minutes."
         return None
@@ -473,6 +493,18 @@ def get_status():
     return status
 
 
+def stop_scan(wait=5.0):
+    """Stops the running scan (if any). Waits briefly for it to wind down.
+    Returns True if a scan was running."""
+    if not _last_scan_status["running"]:
+        return False
+    _stop_requested.set()
+    deadline = time.time() + wait
+    while _last_scan_status["running"] and time.time() < deadline:
+        time.sleep(0.1)
+    return True
+
+
 def get_progress():
     """Live progress of the running scan, or None when idle."""
     if not _last_scan_status["running"] or not _progress:
@@ -522,7 +554,14 @@ def background_loop():
     """Runs forever, scanning on an interval. Call in a daemon thread."""
     init_db()
     cleanup_stale_temp_files()
+    _schedule_next(FIRST_SCAN_DELAY_SECONDS)
     while True:
         run_scan()
-        _last_scan_status["next_run"] = time.time() + SCAN_INTERVAL_SECONDS
-        time.sleep(SCAN_INTERVAL_SECONDS)
+        _schedule_next(SCAN_INTERVAL_SECONDS)
+
+
+def _schedule_next(seconds):
+    """Sleeps until the next automatic scan, publishing when it will be."""
+    _last_scan_status["next_run"] = time.time() + seconds
+    _last_scan_status["next_total"] = seconds
+    time.sleep(seconds)

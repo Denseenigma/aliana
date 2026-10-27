@@ -350,6 +350,12 @@
   .sig i.on { background: var(--green); }
   .wifi-hint { margin-top: auto; font-size: 10px; letter-spacing: 0.08em; color: var(--orange); line-height: 13px; }
   .wifi-url { font-family: var(--mono); font-size: 11px; color: var(--text); text-transform: none; word-break: break-all; }
+  #scan-btn.stopping {
+    background: #fff;
+    color: var(--red);
+    opacity: 1;
+    animation: pulse 0.5s steps(1) infinite;
+  }
   #scan-btn.busy { background: var(--red); color: #000; opacity: 1; animation: pulse 1.6s ease-in-out infinite; }
   @keyframes pulse { 50% { opacity: 0.6; } }
 </style>
@@ -420,6 +426,10 @@
   var state = null;
   var seenRecent = {};
   var pollTimer = null;
+  var stopping = false;       // stop request sent, waiting for the scan to end
+  var stopCountdown = null;   // seconds left before stopping, or null
+  var countdownTimer = null;
+  var STOP_DELAY = 5;
   var tickTimer = null;
 
   function esc(s) {
@@ -536,9 +546,22 @@
     feed.innerHTML = html;
 
     // Controls
-    $("scan-btn").disabled = s.running;
-    $("scan-btn").textContent = s.running ? "SCANNING…" : "SCAN NOW";
-    $("scan-btn").className = s.running ? "busy" : "";
+    var btn = $("scan-btn");
+    if (!s.running && stopCountdown !== null) cancelCountdown();  // scan ended on its own
+    if (stopping) {
+      btn.textContent = "STOPPING\u2026";
+      btn.className = "stopping";
+    } else if (s.running && stopCountdown !== null) {
+      btn.textContent = "STOPPING " + stopCountdown;
+      btn.className = "stopping";
+    } else if (s.running) {
+      btn.textContent = "SCANNING\u2026";
+      btn.className = "busy";
+    } else {
+      btn.textContent = "SCAN NOW";
+      btn.className = "";
+    }
+    btn.disabled = stopping;
     $("iface-btn").disabled = s.running || s.interfaces.length < 2;
   }
 
@@ -570,11 +593,44 @@
       .then(poll);
   }
 
+  // While scanning, a tap starts a 5-second "STOPPING n" countdown;
+  // tapping again during the countdown cancels it and the scan carries on.
+  function cancelCountdown() {
+    clearInterval(countdownTimer);
+    countdownTimer = null;
+    stopCountdown = null;
+  }
+
+  function sendStop() {
+    cancelCountdown();
+    stopping = true;
+    render();
+    fetch("/api/scan/stop", { method: "POST" })
+      .then(function (r) { return r.json(); })
+      .then(function (d) { stopping = false; apply(d); })
+      .catch(function () { stopping = false; render(); })
+      .then(poll);
+  }
+
   $("scan-btn").addEventListener("click", function () {
-    if (state && state.running) return;
-    $("scan-btn").disabled = true;
-    $("scan-btn").textContent = "STARTING…";
-    post("/api/scan");
+    if (stopping) return;
+    if (state && state.running) {
+      if (stopCountdown !== null) {
+        cancelCountdown();          // second tap: never mind
+      } else {
+        stopCountdown = STOP_DELAY;
+        countdownTimer = setInterval(function () {
+          stopCountdown -= 1;
+          if (stopCountdown <= 0) sendStop();
+          else render();
+        }, 1000);
+      }
+      render();
+    } else {
+      $("scan-btn").disabled = true;
+      $("scan-btn").textContent = "STARTING\u2026";
+      post("/api/scan");
+    }
   });
   // ---- Wi-Fi panel ----
   var wifiTimer = null, lastQrUrl = null;
