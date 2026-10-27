@@ -50,6 +50,46 @@ Section "InputClass"
 EndSection
 EOF
 
+echo "==> Setting up NetworkManager for Wi-Fi..."
+# Wi-Fi is managed through NetworkManager. If systemd-networkd already runs
+# other interfaces (e.g. usb0 for the USB gadget link, eth0), leave those to
+# networkd and let NetworkManager handle only Wi-Fi, so the two don't fight.
+UNMANAGED="interface-name:usb0"
+if systemctl is-active --quiet systemd-networkd; then
+    for name in $(grep -hoP '^Name=\K\S+' /etc/systemd/network/*.network 2>/dev/null | sort -u); do
+        case "$name" in
+            wl*|usb0) ;;  # Wi-Fi stays with NetworkManager; usb0 already listed
+            *) UNMANAGED="$UNMANAGED;interface-name:$name" ;;
+        esac
+    done
+fi
+sudo mkdir -p /etc/NetworkManager/conf.d
+# "zz-" so this loads last and wins over any other unmanaged-devices setting
+printf '[keyfile]\nunmanaged-devices=%s\n' "$UNMANAGED" | \
+    sudo tee /etc/NetworkManager/conf.d/zz-aliana-unmanaged.conf > /dev/null
+echo "    left to systemd-networkd: ${UNMANAGED//interface-name:/}"
+# A failed/stopped dhcpcd would only fight NetworkManager over wlan0
+if systemctl is-enabled --quiet dhcpcd 2>/dev/null && ! systemctl is-active --quiet dhcpcd; then
+    sudo systemctl disable dhcpcd >/dev/null 2>&1 || true
+    echo "    disabled inactive dhcpcd"
+fi
+# Don't let boot wait for a network to come online (it can stall the
+# kiosk for minutes when no network is available)
+sudo systemctl disable NetworkManager-wait-online >/dev/null 2>&1 || true
+sudo mkdir -p /etc/systemd/system/systemd-networkd-wait-online.service.d
+sudo tee /etc/systemd/system/systemd-networkd-wait-online.service.d/override.conf > /dev/null <<'EOF'
+[Service]
+ExecStart=
+ExecStart=/lib/systemd/systemd-networkd-wait-online --any --timeout=5
+EOF
+sudo systemctl daemon-reload
+sudo systemctl enable NetworkManager >/dev/null 2>&1
+if systemctl is-active --quiet NetworkManager; then
+    sudo systemctl reload NetworkManager || sudo systemctl restart NetworkManager
+else
+    sudo systemctl start NetworkManager
+fi
+
 echo "==> Allowing Aliana to manage Wi-Fi (NetworkManager polkit rule)..."
 # The aliana service runs as a normal user (User= in aliana.service). This
 # rule lets that one user -- and only for NetworkManager actions -- scan,

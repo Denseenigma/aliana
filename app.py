@@ -118,10 +118,13 @@ def wifi_page():
 
 @app.route("/api/wifi")
 def api_wifi():
+    # setup_url (and the QR code) don't depend on NetworkManager, so they're
+    # always returned -- even when the Wi-Fi status itself can't be read.
+    url = _setup_url()
     try:
-        return jsonify({"ok": True, "status": wifi.status(), "saved": wifi.saved(), "setup_url": _setup_url()})
+        return jsonify({"ok": True, "status": wifi.status(), "saved": wifi.saved(), "setup_url": url})
     except wifi.WifiError as e:
-        return _wifi_error(e)
+        return jsonify({"ok": False, "error": str(e), "setup_url": url})
 
 
 @app.route("/api/wifi/scan")

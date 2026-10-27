@@ -20,7 +20,9 @@ def _nmcli(args, timeout=20):
         raise WifiError("Timed out talking to NetworkManager.")
     if r.returncode != 0:
         msg = (r.stderr or r.stdout).strip().replace("Error: ", "")
-        if "not authorized" in msg.lower() or "insufficient privileges" in msg.lower():
+        if "networkmanager is not running" in msg.lower():
+            msg = "NetworkManager isn't running on the Pi, so Wi-Fi can't be managed from here yet."
+        elif "not authorized" in msg.lower() or "insufficient privileges" in msg.lower():
             msg = "Not authorized to change Wi-Fi. Re-run setup.sh on the Pi to grant Aliana permission."
         raise WifiError(msg or f"nmcli exited with code {r.returncode}")
     return r.stdout

@@ -596,21 +596,29 @@
     $("wifi-sig").innerHTML = s.state === "connected"
       ? sigBars(s.signal || 0) + (s.signal != null ? s.signal + "%  " : "") + esc(s.ip || "")
       : "–";
-    $("wifi-url").textContent = d.setup_url || "no network address yet";
-    if (d.setup_url !== lastQrUrl) {
-      lastQrUrl = d.setup_url;
-      $("wifi-qr").innerHTML = d.setup_url
-        ? '<img alt="" src="/api/wifi/qr.svg?u=' + encodeURIComponent(d.setup_url) + '">'
-        : '<div class="none">Connect a network cable or the USB link to get an address.</div>';
-    }
+  }
+
+  function renderQr(url) {
+    $("wifi-url").textContent = url || "no network address yet";
+    if (url === lastQrUrl) return;
+    lastQrUrl = url;
+    $("wifi-qr").innerHTML = url
+      ? '<img alt="" src="/api/wifi/qr.svg?u=' + encodeURIComponent(url) + '">'
+      : '<div class="none">Connect a network cable or the USB link to get an address.</div>';
   }
 
   function loadWifi() {
     fetch("/api/wifi", { cache: "no-store" })
       .then(function (r) { return r.json(); })
       .then(function (d) {
+        renderQr(d.setup_url);
         if (d.ok) renderWifi(d);
-        else { $("wifi-state").className = "v bad"; $("wifi-state").textContent = d.error; }
+        else {
+          $("wifi-state").className = "v bad";
+          $("wifi-state").textContent = /NetworkManager/.test(d.error) ? "NETWORKMANAGER OFF" : d.error;
+          $("wifi-ssid").textContent = "\u2013";
+          $("wifi-sig").textContent = "\u2013";
+        }
       })
       .catch(function () {});
   }
