@@ -92,8 +92,8 @@ def _kiosk_state():
     current = status["interface"]
     iface_ip = next((i["ipv4"] for i in interfaces if i["name"] == current), None)
     next_in = None
-    if status.get("next_run") and not status["running"]:
-        next_in = max(0, int(status["next_run"] - time.time()))
+    if not status["running"]:
+        next_in = scanner.next_scan_in()
     return {
         "running": status["running"],
         "outcome": status.get("last_outcome"),

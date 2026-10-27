@@ -867,7 +867,8 @@
       })
       .then(function () {
         // Fast updates while scanning, slower when idle
-        pollTimer = setTimeout(poll, state && state.running ? 1000 : 3000);
+        // (and every second while the countdown sits at zero, waiting for the scan to start)
+        pollTimer = setTimeout(poll, state && (state.running || timerAtZero()) ? 1000 : 3000);
       });
   }
 
@@ -1074,9 +1075,12 @@
   }
 
   var nextTarget = null;     // ms timestamp of the next automatic scan
+  var zeroPolled = false;
   function syncTimerTarget() {
     nextTarget = (state && !state.running && state.next_in != null) ? Date.now() + state.next_in * 1000 : null;
+    if (nextTarget === null || state.next_in > 0) zeroPolled = false;
   }
+  function timerAtZero() { return nextTarget !== null && Date.now() >= nextTarget - 500; }
 
   function updateTimer() {
     var show = state && !state.running && !state.error;
@@ -1090,8 +1094,9 @@
       $("timer-what").textContent = "Standby";
       return;
     }
-    $("timer-what").textContent = "Next scan";
     var ms = Math.max(0, nextTarget - Date.now());
+    $("timer-what").textContent = ms === 0 ? "Starting\u2026" : "Next scan";
+    if (ms === 0 && !zeroPolled) { zeroPolled = true; poll(); }   // don't wait for the next 3 s poll
     var m = Math.floor(ms / 60000), s = Math.floor(ms / 1000) % 60, cs = Math.floor(ms / 10) % 100;
     if (m > 99) m = 99;
     var pad = function (n) { return (n < 10 ? "0" : "") + n; };

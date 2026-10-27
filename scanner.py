@@ -11,6 +11,7 @@ import ipaddress
 import os
 import tempfile
 import uuid
+import traceback
 import re
 import pty
 import select
@@ -626,17 +627,36 @@ def get_latest_summary():
 
 
 def background_loop():
-    """Runs forever, scanning on an interval. Call in a daemon thread."""
-    init_db()
-    cleanup_stale_temp_files()
+    """Runs forever, scanning on an interval. Call in a daemon thread.
+    Any unexpected error is logged and the loop carries on, so automatic
+    scans can't silently stop."""
+    try:
+        init_db()
+        cleanup_stale_temp_files()
+    except Exception:
+        traceback.print_exc()
     _schedule_next(FIRST_SCAN_DELAY_SECONDS)
     while True:
-        run_scan()
+        try:
+            run_scan()
+        except Exception:
+            traceback.print_exc()
         _schedule_next(SCAN_INTERVAL_SECONDS)
 
 
 def _schedule_next(seconds):
-    """Sleeps until the next automatic scan, publishing when it will be."""
-    _last_scan_status["next_run"] = time.time() + seconds
+    """Sleeps until the next automatic scan, publishing when it will be.
+    Uses the monotonic clock: the Pi has no battery-backed clock and its
+    wall time jumps when it syncs over the network after boot, which would
+    otherwise make the countdown hit zero early."""
+    _last_scan_status["next_run"] = time.monotonic() + seconds
     _last_scan_status["next_total"] = seconds
     time.sleep(seconds)
+
+
+def next_scan_in():
+    """Seconds until the next automatic scan, or None if not scheduled."""
+    nr = _last_scan_status.get("next_run")
+    if nr is None or _last_scan_status["running"]:
+        return None
+    return max(0, int(round(nr - time.monotonic())))
