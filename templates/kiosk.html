@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Aliana</title>
+<script>if (/[?&]mirror=1/.test(location.search)) document.documentElement.className += " mirror";</script>
 <!--
   Onboard-screen view (480x320 touchscreen). Fits on one screen with no
   scrolling: live scan progress, headline numbers, and the two controls.
@@ -32,6 +33,14 @@
     --inset-top: 0px;
     --inset-right: 20px;
     --inset-bottom: 6px;
+    --inset-left: 0px;
+  }
+  /* Mirror mode (/kiosk?mirror=1, shown inside the web dashboard's PI SCREEN
+     viewer): there's no bezel there, so drop the safe-area insets. */
+  :root.mirror {
+    --inset-top: 0px;
+    --inset-right: 0px;
+    --inset-bottom: 0px;
     --inset-left: 0px;
   }
 

@@ -296,6 +296,96 @@
   .hrow .n small { font-family: var(--sans); font-size: 0.7rem; letter-spacing: 0.12em; color: var(--muted); margin-left: 4px; }
   .hrow .sub { color: var(--muted); font-size: 0.8rem; letter-spacing: 0.06em; }
   .hrow .sub-r { text-align: right; }
+
+  /* ---------- Pi screen viewer (live, interactive copy of /kiosk) ---------- */
+  .nav button.screen-btn {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: transparent;
+    color: var(--cyan);
+    border: 1px solid var(--cyan);
+    font-family: var(--sans);
+    font-size: 0.95rem;
+    letter-spacing: 0.1em;
+    padding: 7px 14px;
+    clip-path: none;
+  }
+  .nav button.screen-btn:hover { background: var(--cyan); color: #000; }
+  .nav button.screen-btn .dot { background: var(--cyan); box-shadow: 0 0 6px var(--cyan); }
+  .nav button.screen-btn:hover .dot { background: #000; box-shadow: none; }
+
+  .mirror {
+    position: fixed;
+    inset: 0;
+    z-index: 100;
+    display: none;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 14px;
+    padding: 20px;
+    background-color: #000;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='28' height='48' viewBox='0 0 28 48'%3E%3Cpath d='M14 0 L28 8 L28 24 L14 32 L0 24 L0 8 Z M14 32 L14 48' fill='none' stroke='%23ff7a00' stroke-opacity='0.06'/%3E%3C/svg%3E");
+  }
+  .mirror.open { display: flex; }
+  body.mirror-open { overflow: hidden; }
+  .mirror-bar {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 10px 14px;
+  }
+  .mirror-title {
+    background: var(--accent);
+    color: #000;
+    font-family: var(--title);
+    font-size: 1.5rem;
+    line-height: 1;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    padding: 4px 26px 2px 12px;
+    clip-path: polygon(0 0, 100% 0, calc(100% - 14px) 100%, 0 100%);
+  }
+  .mirror-live {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    color: var(--green);
+    font-size: 0.85rem;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+  }
+  .mirror-live .dot { animation: blink 1.2s steps(1) infinite; }
+  .mirror-bar button { font-size: 1.05rem; padding: 7px 20px 5px 14px; }
+  .mirror-bar button.ghost { background: transparent; color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+  .mirror-bar button.ghost:hover { background: var(--accent); color: #000; }
+  /* Frame around the screen: orange line work + hazard stripe, like a bezel */
+  .mirror-frame {
+    position: relative;
+    padding: 10px;
+    border: 2px solid var(--accent);
+    background: #000;
+    box-shadow: 0 0 30px rgba(255, 122, 0, 0.25);
+  }
+  .mirror-frame::after {
+    content: "";
+    position: absolute;
+    left: -2px; right: -2px; bottom: -12px;
+    height: 6px;
+    background: repeating-linear-gradient(-45deg, var(--accent) 0 8px, #000 8px 16px);
+    opacity: 0.8;
+  }
+  .mirror-screen { overflow: hidden; }   /* sized by JS to 480x320 * scale */
+  .mirror-screen iframe {
+    display: block;
+    width: 480px;
+    height: 320px;
+    border: 0;
+    transform-origin: 0 0;
+    background: #000;
+  }
+  .mirror-hint { color: var(--muted); font-size: 0.8rem; letter-spacing: 0.1em; text-transform: uppercase; }
 </style>
 </head>
 <body>
@@ -313,7 +403,7 @@
     </svg>
     Aliana <small>network recon</small>
   </h1>
-  <nav class="nav"><a href="/" class="on">Dashboard</a><a href="/wifi">Wi-Fi</a></nav>
+  <nav class="nav"><a href="/" class="on">Dashboard</a><a href="/wifi">Wi-Fi</a><button type="button" class="screen-btn" id="mirror-open-btn" title="Live, interactive view of the Pi's onboard screen"><span class="dot"></span>Pi screen</button></nav>
 
   <div class="controls">
     <div class="state {{ 'running' if status.running else '' }}">
@@ -447,6 +537,18 @@
 
 </div>
 
+<div class="mirror" id="mirror" role="dialog" aria-modal="true" aria-label="Pi screen">
+  <div class="mirror-bar">
+    <span class="mirror-title">Pi screen</span>
+    <span class="mirror-live"><span class="dot"></span>Live &middot; interactive</span>
+    <button type="button" class="ghost" id="mirror-reload" title="Reload the view (replays the boot sequence)">Reboot view</button>
+    <button type="button" class="ghost" id="mirror-full">Full screen</button>
+    <button type="button" id="mirror-close">Close</button>
+  </div>
+  <div class="mirror-frame"><div class="mirror-screen" id="mirror-screen"><iframe id="mirror-frame" title="Aliana onboard screen" scrolling="no"></iframe></div></div>
+  <div class="mirror-hint">Click to tap &middot; Esc to close</div>
+</div>
+
 <script>
 // Stop scan: clicking starts a 5-second countdown ("Stopping 5..."); clicking
 // again cancels it. Same behaviour as the onboard screen's button.
@@ -493,9 +595,91 @@
   setInterval(function () {
     fetch("/api/status", { cache: "no-store" })
       .then(function (r) { return r.json(); })
-      .then(function (s) { if (!s.running && !btn.disabled) location.reload(); })
+      .then(function (s) { if (!s.running && !btn.disabled && !window.alianaMirrorOpen) location.reload(); })
       .catch(function () {});
   }, 3000);
+})();
+
+// Pi screen viewer: embeds the onboard-screen page (/kiosk) at its native
+// 480x320, scaled up to fit the window. It talks to the same Flask APIs as
+// the real screen, so taps here drive the Pi (scan picker, stop, iface...).
+// The iframe is only loaded while the viewer is open, so it costs nothing
+// otherwise. Open it directly with /#screen (handy when presenting).
+(function () {
+  var W = 480, H = 320;
+  var box = document.getElementById("mirror");
+  var screen = document.getElementById("mirror-screen");
+  var frame = document.getElementById("mirror-frame");
+  var fullBtn = document.getElementById("mirror-full");
+  var openSig = null;
+
+  // What the dashboard was rendered with -- if a scan starts/stops or the
+  // profile/interface changes from inside the viewer, reload on close.
+  function sig(s) { return [s.running, s.outcome_seq, s.profile, s.interface].join("|"); }
+  function status() { return fetch("/api/status", { cache: "no-store" }).then(function (r) { return r.json(); }); }
+
+  function fit() {
+    var bar = 160;   // room for the title bar, hint and frame padding
+    var scale = Math.min((window.innerWidth - 60) / W, (window.innerHeight - bar) / H);
+    scale = Math.max(0.5, Math.min(scale, 4));
+    frame.style.transform = "scale(" + scale + ")";
+    screen.style.width = Math.round(W * scale) + "px";
+    screen.style.height = Math.round(H * scale) + "px";
+  }
+
+  function open() {
+    if (window.alianaMirrorOpen) return;
+    window.alianaMirrorOpen = true;
+    status().then(function (s) { openSig = sig(s); }).catch(function () {});
+    frame.src = "/kiosk?mirror=1";
+    box.className = "mirror open";
+    document.body.classList.add("mirror-open");
+    fit();
+    if (location.hash !== "#screen") history.replaceState(null, "", "#screen");
+  }
+
+  function close() {
+    if (!window.alianaMirrorOpen) return;
+    if (document.fullscreenElement) document.exitFullscreen().catch(function () {});
+    window.alianaMirrorOpen = false;
+    frame.src = "about:blank";
+    box.className = "mirror";
+    document.body.classList.remove("mirror-open");
+    history.replaceState(null, "", location.pathname + location.search);
+    status().then(function (s) {
+      if (openSig === null || sig(s) !== openSig) location.reload();
+    }).catch(function () { location.reload(); });
+  }
+
+  document.getElementById("mirror-open-btn").addEventListener("click", open);
+  document.getElementById("mirror-close").addEventListener("click", close);
+  document.getElementById("mirror-reload").addEventListener("click", function () {
+    frame.src = "/kiosk?mirror=1&t=" + Date.now();
+  });
+  fullBtn.addEventListener("click", function () {
+    if (document.fullscreenElement) document.exitFullscreen().catch(function () {});
+    else if (box.requestFullscreen) box.requestFullscreen().catch(function () {});
+  });
+  document.addEventListener("fullscreenchange", function () {
+    fullBtn.textContent = document.fullscreenElement ? "Exit full screen" : "Full screen";
+    fit();
+  });
+  // Esc pressed while the embedded screen has focus (keys don't bubble out of iframes)
+  frame.addEventListener("load", function () {
+    try {
+      frame.contentWindow.addEventListener("keydown", function (e) {
+        if (e.key === "Escape" && !document.fullscreenElement) close();
+      });
+    } catch (err) {}
+  });
+  window.addEventListener("resize", function () { if (window.alianaMirrorOpen) fit(); });
+  document.addEventListener("keydown", function (e) {
+    if (e.key === "Escape" && window.alianaMirrorOpen && !document.fullscreenElement) close();
+  });
+  window.addEventListener("hashchange", function () {
+    if (location.hash === "#screen") open(); else close();
+  });
+  if (location.hash === "#screen") open();
 })();
 </script>
 </body>
