@@ -81,6 +81,8 @@ def _kiosk_state():
         "running": status["running"],
         "profile": status["profile"],
         "profile_label": scanner.PROFILES[status["profile"]]["label"],
+        "profiles": [{"key": k, "label": p["label"], "short": p["short"]}
+                     for k, p in scanner.PROFILES.items()],
         "error": status["last_error"],
         "interface": current,
         "interface_ip": iface_ip,
@@ -99,7 +101,12 @@ def api_kiosk():
 
 @app.route("/api/scan", methods=["POST"])
 def api_scan():
+    """Starts a scan. Optional JSON {"profile": ...}: runs that profile and
+    remembers it as the default for automatic scans."""
+    profile = (request.get_json(silent=True) or {}).get("profile")
     if not scanner.get_status()["running"]:
+        if profile in scanner.PROFILES:
+            scanner.set_profile(profile)
         threading.Thread(target=scanner.run_scan, daemon=True).start()
         time.sleep(0.2)  # let the scan flag flip so the response reflects it
     return jsonify(_kiosk_state())

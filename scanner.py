@@ -29,6 +29,7 @@ PROFILES = {
         "label": "Discovery",
         "description": "Who's on the network: host sweep only (ARP/ping), MAC vendor, "
                        "hostname. No port scan -- very low impact.",
+        "short": "Who's here: host sweep, no port scan",
         "args": ["-sn", "-T3"],
         "timeout": 300,
     },
@@ -36,6 +37,7 @@ PROFILES = {
         "label": "Standard",
         "description": "Top 100 TCP ports with light version detection, normal timing, "
                        "rate-capped. Safe for most office networks.",
+        "short": "Top 100 ports, light probing, rate-capped",
         "args": ["-sV", "--version-light", "-T3", "--top-ports", "100",
                  "--max-rate", "300", "--host-timeout", "5m"],
         "timeout": 1200,
@@ -44,6 +46,7 @@ PROFILES = {
         "label": "Deep",
         "description": "Top 1000 TCP ports with full version detection. Much more "
                        "traffic and probing -- run deliberately, not on fragile/OT networks.",
+        "short": "Top 1000 ports, full version probing",
         "args": ["-sV", "-T3", "--top-ports", "1000",
                  "--max-rate", "300", "--host-timeout", "15m"],
         "timeout": 3600,

@@ -233,7 +233,10 @@
   .error-banner { border-radius: 0; background: #1a0000; }
   button.stop { background: var(--danger); }
   button.stop:hover { background: #ff5a5a; }
-  select.deep { border-color: var(--danger); color: var(--danger); }
+  select.profile-deep { border-color: var(--danger); color: var(--danger); }
+  select.profile-discovery { border-color: #00e5ff; color: #00e5ff; }
+  .profile-desc.profile-discovery strong { color: #00e5ff; }
+  .profile-desc.profile-deep strong { color: var(--danger); }
   select:disabled { opacity: 0.5; }
   .profile-desc {
     flex-basis: 100%;
@@ -295,7 +298,7 @@
 
     <form action="{{ url_for('set_profile') }}" method="post" class="iface-form"
           title="{{ profiles[status.profile].description }}">
-      <select name="profile" onchange="this.form.submit()" class="{{ 'deep' if status.profile == 'deep' else '' }}"
+      <select name="profile" onchange="this.form.submit()" class="profile-{{ status.profile }}"
               {{ 'disabled' if status.running else '' }}>
         {% for key, p in profiles.items() %}
         <option value="{{ key }}" {{ 'selected' if key == status.profile else '' }}>Profile: {{ p.label }}</option>
@@ -308,7 +311,7 @@
       <button type="submit" id="scan-btn" class="{{ 'stop' if status.running else '' }}">{{ 'Stop scan' if status.running else 'Scan now' }}</button>
     </form>
   </div>
-  <div class="profile-desc">
+  <div class="profile-desc profile-{{ status.profile }}">
     <strong>{{ profiles[status.profile].label }}:</strong> {{ profiles[status.profile].description }}
   </div>
 </header>

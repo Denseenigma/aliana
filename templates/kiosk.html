@@ -248,7 +248,7 @@
   /* Controls */
   .controls {
     display: grid;
-    grid-template-columns: 5fr 3fr 3fr 3fr;
+    grid-template-columns: 2fr 1fr 1fr;
     gap: 5px;
   }
   button {
@@ -350,9 +350,63 @@
   .sig i.on { background: var(--green); }
   .wifi-hint { margin-top: auto; font-size: 10px; letter-spacing: 0.08em; color: var(--orange); line-height: 13px; }
   .wifi-url { font-family: var(--mono); font-size: 11px; color: var(--text); text-transform: none; word-break: break-all; }
-  /* Deep profile: flag it so it's never selected by accident */
-  #profile-btn.deep { color: var(--red); box-shadow: inset 0 0 0 1px var(--red); }
-  #profile-btn.deep:disabled { color: #5a1010; box-shadow: inset 0 0 0 1px #5a1010; }
+  /* Profile colours: Discovery cyan, Standard orange, Deep red */
+  :root { --cyan: #00e5ff; }
+  .ptag {
+    display: inline-block;
+    font-family: var(--cond);
+    font-weight: bold;
+    font-size: 10px;
+    letter-spacing: 0.1em;
+    padding: 1px 5px;
+    margin-right: 7px;
+    vertical-align: 3px;
+    color: #000;
+    background: var(--orange);
+  }
+  .ptag.discovery { background: var(--cyan); }
+  .ptag.deep { background: var(--red); }
+
+  /* Scan picker (opens from SCAN NOW) */
+  .picker {
+    position: fixed;
+    top: var(--inset-top);
+    right: var(--inset-right);
+    bottom: var(--inset-bottom);
+    left: var(--inset-left);
+    z-index: 10;
+    display: none;
+    flex-direction: column;
+    gap: 5px;
+    padding: 5px 6px 6px;
+    background: #000;
+  }
+  .picker.show { display: flex; }
+  .pick {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: flex-start;
+    gap: 2px;
+    height: auto;
+    padding: 0 12px 0 16px;
+    background: var(--panel);
+    color: var(--orange);
+    border-left: 8px solid var(--orange);
+    box-shadow: inset 0 0 0 1px var(--line-dim);
+    clip-path: polygon(0 0, calc(100% - 14px) 0, 100% 14px, 100% 100%, 0 100%);
+    text-align: left;
+  }
+  .pick .pick-name { font-family: var(--title); font-size: 21px; letter-spacing: 0.08em; }
+  .pick .pick-desc { font-family: var(--cond); font-size: 12px; font-weight: normal; letter-spacing: 0.04em; color: var(--text); }
+  .pick .pick-default { font-family: var(--cond); font-size: 9px; letter-spacing: 0.12em; color: var(--muted); }
+  .pick.discovery { color: var(--cyan); border-left-color: var(--cyan); }
+  .pick.deep { color: var(--red); border-left-color: var(--red); }
+  .pick:active { background: var(--line-dim); }
+  .pick.discovery:active { background: #003840; }
+  .pick.deep:active { background: #400000; }
+  .picker .wifi-head button { height: 34px; padding: 0 14px; }
   #scan-btn.stopping {
     background: #fff;
     color: var(--red);
@@ -384,7 +438,7 @@
 
 <section class="status" id="status">
   <div class="status-line">
-    <span class="phase" id="phase">Connecting&hellip;</span>
+    <span class="phase"><span class="ptag" id="ptag" style="display:none"></span><span id="phase">Connecting&hellip;</span></span>
     <span class="status-right" id="status-right"></span>
   </div>
   <div class="bar"><div class="bar-fill" id="bar"></div></div>
@@ -401,8 +455,16 @@
 <section class="controls">
   <button id="scan-btn" type="button">SCAN NOW</button>
   <button id="iface-btn" class="secondary" type="button">IFACE &#x21bb;</button>
-  <button id="profile-btn" class="secondary" type="button">STANDARD</button>
   <button id="wifi-btn" class="secondary" type="button">WI-FI</button>
+</section>
+
+<section class="picker" id="picker">
+  <div class="wifi-head">
+    <div class="wifi-title">SELECT SCAN</div>
+    <div class="hazard"></div>
+    <button id="picker-close" class="secondary" type="button">CANCEL</button>
+  </div>
+  <div id="picks" style="display:contents"></div>
 </section>
 
 <section class="wifi-panel" id="wifi-panel">
@@ -505,7 +567,7 @@
     // Tiles
     if (s.running && p) {
       $("hosts").textContent = p.hosts_up;
-      $("ports").textContent = p.open_ports;
+      $("ports").textContent = p.profile === "discovery" ? "\u2013" : p.open_ports;
       $("third").textContent = dur(p.elapsed);
       $("third-label").textContent = "Elapsed";
     } else {
@@ -523,7 +585,9 @@
     if (s.running && p) {
       html = '<div class="feed-title">Live — ' + esc(s.profile_label) + " — " + esc(p.subnet) + "</div>";
       if (!p.recent.length) {
-        html += '<div class="muted">No open ports found yet…</div>';
+        html += '<div class="muted">' + (p.profile === "discovery"
+          ? "Host sweep only \u2014 Discovery doesn't scan ports."
+          : "No open ports found yet\u2026") + "</div>";
       }
       p.recent.forEach(function (r) {
         var key = r.ip + ":" + r.port + "/" + r.proto;
@@ -567,9 +631,13 @@
     }
     btn.disabled = stopping;
     $("iface-btn").disabled = s.running || s.interfaces.length < 2;
-    $("profile-btn").textContent = s.profile_label.toUpperCase();
-    $("profile-btn").className = "secondary" + (s.profile === "deep" ? " deep" : "");
-    $("profile-btn").disabled = s.running;
+    // Profile tag: the running scan's profile, or (idle) the one next up
+    var prof = (s.running && p && p.profile) || s.profile;
+    var label = prof === s.profile ? s.profile_label :
+      (s.profiles.filter(function (x) { return x.key === prof; })[0] || {}).label || prof;
+    $("ptag").style.display = "";
+    $("ptag").className = "ptag " + prof;
+    $("ptag").textContent = String(label).toUpperCase();
   }
 
   function apply(data) {
@@ -634,11 +702,41 @@
       }
       render();
     } else {
-      $("scan-btn").disabled = true;
-      $("scan-btn").textContent = "STARTING\u2026";
-      post("/api/scan");
+      openPicker();
     }
   });
+
+  // ---- Scan picker ----
+  function openPicker() {
+    if (!state) return;
+    $("picks").innerHTML = state.profiles.map(function (pr) {
+      return '<button type="button" class="pick ' + pr.key + '" data-profile="' + pr.key + '">' +
+        '<span class="pick-name">' + esc(pr.label.toUpperCase()) + "</span>" +
+        '<span class="pick-desc">' + esc(pr.short) + "</span>" +
+        (pr.key === state.profile ? '<span class="pick-default">LAST USED \u00b7 AUTO-SCANS USE THIS</span>' : "") +
+        "</button>";
+    }).join("");
+    $("picker").className = "picker show";
+  }
+  function closePicker() { $("picker").className = "picker"; }
+
+  $("picks").addEventListener("click", function (e) {
+    var b = e.target.closest(".pick");
+    if (!b) return;
+    closePicker();
+    $("scan-btn").disabled = true;
+    $("scan-btn").textContent = "STARTING\u2026";
+    fetch("/api/scan", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ profile: b.getAttribute("data-profile") })
+    })
+      .then(function (r) { return r.json(); })
+      .then(apply)
+      .catch(function () {})
+      .then(poll);
+  });
+  $("picker-close").addEventListener("click", closePicker);
   // ---- Wi-Fi panel ----
   var wifiTimer = null, lastQrUrl = null;
 
@@ -697,9 +795,6 @@
     clearInterval(wifiTimer);
   });
 
-  $("profile-btn").addEventListener("click", function () {
-    post("/api/profile/next");
-  });
   $("iface-btn").addEventListener("click", function () {
     post("/api/interface/next");
   });
