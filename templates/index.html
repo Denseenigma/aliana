@@ -290,6 +290,20 @@
   td.svc { color: var(--text); }
   td.ver { color: var(--muted); }
   .empty { color: var(--muted); letter-spacing: 0.06em; padding: 4px 0; }
+  .empty.small { font-size: 0.75rem; padding-top: 6px; }
+  .host .count { display: flex; gap: 4px; }
+  .tag.closed { background: transparent; color: var(--red); box-shadow: inset 0 0 0 1px var(--red); }
+  /* Ports carried over from earlier scans */
+  tr.earlier td { opacity: 0.55; }
+  tr.earlier td.port { color: var(--muted); }
+  tr.earlier.closed td { opacity: 0.8; }
+  tr.earlier.closed td.port { color: var(--red); text-decoration: line-through; }
+  tr.earlier .seen { display: block; font-size: 0.72rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+  tr.earlier.closed .seen { color: var(--red); }
+  .error-banner.viewing a { color: var(--accent); margin-left: 10px; }
+  a.hrow { color: inherit; text-decoration: none; }
+  a.hrow:hover { background: rgba(255, 122, 0, 0.08); }
+  .hrow.sel { box-shadow: inset 3px 0 0 var(--accent); padding-left: 8px; }
 
   /* ---------- History ---------- */
   .history { display: flex; flex-direction: column; }
@@ -473,11 +487,15 @@
 <div class="error-banner notice">NOTE &middot; {{ status.notice }}</div>
 {% endif %}
 
+{% if viewing_old %}
+<div class="error-banner notice viewing">VIEWING AN OLDER SCAN &middot; {{ scan.finished_at | when }} ({{ scan.finished_at | ago }}) <a href="/">Back to latest &rarr;</a></div>
+{% endif %}
+
 <div class="grid">
   <div>
     <section class="panel">
       <div class="panel-head">
-        <h2>Latest scan</h2>
+        <h2>{{ 'Scan' if viewing_old else 'Latest scan' }}</h2>
         {% if scan %}
           {% if scan.profile and scan.profile in profiles %}<span class="tag {{ scan.profile }}">{{ profiles[scan.profile].label }}</span>{% endif %}
           {% if scan.mode %}<span class="tag outline">{{ 'SYN' if scan.mode == 'syn' else 'Connect' }}</span>{% endif %}
@@ -504,9 +522,13 @@
             <div class="host-top">
               <span class="ip">{{ host.ip }}</span>
               {% if host.hostname %}<span class="name">{{ host.hostname }}</span>{% endif %}
-              {% if scan.profile != 'discovery' %}
-              <span class="count tag {{ '' if open_ports else 'outline' }}">{{ open_ports | length }} open</span>
-              {% endif %}
+              {% set carried = host.earlier | selectattr('state', 'equalto', 'unchecked') | list %}
+              {% set closed = host.earlier | selectattr('state', 'equalto', 'closed') | list %}
+              <span class="count">
+              {% if scan.profile != 'discovery' %}<span class="tag {{ '' if open_ports else 'outline' }}">{{ open_ports | length }} open</span>{% endif %}
+              {% if carried %}<span class="tag outline" title="Open in an earlier scan; not checked by this one">+{{ carried | length }} earlier</span>{% endif %}
+              {% if closed %}<span class="tag closed" title="Open in an earlier scan; closed or filtered now">{{ closed | length }} closed</span>{% endif %}
+              </span>
             </div>
             <div class="meta">
               {% if host.ip in own_ips %}<span class="tag">THIS UNIT</span>
@@ -518,7 +540,7 @@
               <span class="os-k">OS</span> {{ host.os_name }}{% if host.os_accuracy %} <span class="os-acc {{ 'lo' if host.os_accuracy < 90 else '' }}">{{ host.os_accuracy }}%</span>{% endif %}{% if host.os_type %} <span class="os-type">&middot; {{ host.os_type }}</span>{% endif %}
             </div>
             {% endif %}
-            {% if host.ports %}
+            {% if host.ports or host.earlier %}
             <table>
               <tr><th>Port</th><th>Service</th><th>Product / version</th></tr>
               {% for p in host.ports %}
@@ -528,7 +550,16 @@
                 <td class="ver">{{ [p.product, p.version] | select | join(' ') or '&ndash;' | safe }}</td>
               </tr>
               {% endfor %}
+              {% for p in host.earlier %}
+              <tr class="earlier {{ p.state }}">
+                <td class="port">{{ p.port }}/{{ p.protocol }}</td>
+                <td class="svc">{{ p.service or '&ndash;' | safe }}</td>
+                <td class="ver">{{ [p.product, p.version] | select | join(' ') or '' }}
+                  <span class="seen">{% if p.state == 'closed' %}closed now &middot; was open {% else %}last seen {% endif %}{{ p.last_seen | when }}{% if p.profile and p.profile in profiles %} &middot; {{ profiles[p.profile].label }}{% endif %}</span></td>
+              </tr>
+              {% endfor %}
             </table>
+            {% if scan.profile == 'discovery' %}<div class="empty small">Discovery scan &middot; ports above are from earlier scans</div>{% endif %}
             {% elif scan.profile == 'discovery' %}
             <div class="empty">Discovery scan &middot; ports not checked</div>
             {% else %}
@@ -549,12 +580,12 @@
       {% if history %}
       <div class="history">
         {% for h in history %}
-        <div class="hrow">
+        <a class="hrow {{ 'sel' if scan and h.id == scan.id else '' }}" href="{{ '/' if loop.first else url_for('view_scan', scan_id=h.id) }}" title="View this scan">
           <span class="t">{{ h.finished_at | when }}</span>
           <span class="n">{{ h.host_count }}<small>hosts</small></span>
           <span class="sub">{{ h.subnet }}</span>
           <span class="sub sub-r">{% if h.profile and h.profile in profiles %}<span class="tag {{ h.profile }}">{{ profiles[h.profile].label }}</span>{% endif %}</span>
-        </div>
+        </a>
         {% endfor %}
       </div>
       {% else %}

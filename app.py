@@ -51,12 +51,27 @@ def ago(iso):
 
 @app.route("/")
 def index():
-    latest = scanner.get_latest_scan()
+    return _dashboard(None)
+
+
+@app.route("/scan/<int:scan_id>")
+def view_scan(scan_id):
+    """Dashboard showing an older scan (from the history list)."""
+    return _dashboard(scan_id)
+
+
+def _dashboard(scan_id):
+    scan = scanner.get_scan(scan_id)
+    if scan_id is not None and scan is None:
+        return redirect(url_for("index"))
+    latest_id = (scanner.get_scan_history(limit=1) or [{}])[0].get("id")
+    viewing_old = scan is not None and scan["id"] != latest_id
     status = scanner.get_status()
     history = scanner.get_scan_history(limit=10)
     interfaces = scanner.list_interfaces()
     return render_template(
-        "index.html", scan=latest, status=status, history=history, interfaces=interfaces,
+        "index.html", scan=scan, status=status, history=history, interfaces=interfaces,
+        viewing_old=viewing_old,
         profiles=scanner.PROFILES,
         intervals=[(sec, _interval_label(sec)) for sec in scanner.INTERVAL_CHOICES],
         own_ips={i["ipv4"].split("/")[0] for i in interfaces if i["ipv4"]},
@@ -319,6 +334,11 @@ def api_interfaces():
 @app.route("/api/latest")
 def api_latest():
     return jsonify(scanner.get_latest_scan() or {})
+
+
+@app.route("/api/scan/<int:scan_id>")
+def api_scan_detail(scan_id):
+    return jsonify(scanner.get_scan(scan_id) or {})
 
 
 @app.route("/api/status")

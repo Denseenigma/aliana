@@ -284,6 +284,8 @@ def init_db():
         c.execute("ALTER TABLE scans ADD COLUMN profile TEXT")
     if "mode" not in cols:  # "syn" (raw sockets) or "connect"
         c.execute("ALTER TABLE scans ADD COLUMN mode TEXT")
+    if "ports_checked" not in cols:  # e.g. "tcp:1,3,7-9,21" (from nmap's scaninfo)
+        c.execute("ALTER TABLE scans ADD COLUMN ports_checked TEXT")
     # Older databases: OS guess columns (Deep scans with raw sockets)
     hcols = [r[1] for r in c.execute("PRAGMA table_info(hosts)")]
     for col, typ in (("os_name", "TEXT"), ("os_accuracy", "INTEGER"), ("os_type", "TEXT")):
@@ -531,9 +533,10 @@ def run_scan(subnet=None, profile=None):
         _progress["mode"] = mode
 
         hosts = _parse_nmap_xml(xml_path)
+        checked = _parse_scaninfo(xml_path)
         finished = datetime.datetime.now().isoformat()
 
-        scan_id = _store_results(subnet, started, finished, hosts, profile, mode)
+        scan_id = _store_results(subnet, started, finished, hosts, profile, mode, checked)
 
         _last_scan_status["last_run"] = finished
         _last_scan_status["last_error"] = None
@@ -642,13 +645,44 @@ def _parse_nmap_xml(path):
     return hosts
 
 
-def _store_results(subnet, started, finished, hosts, profile=None, mode=None):
+def _parse_scaninfo(path):
+    """Which ports the scan actually checked, from nmap's <scaninfo> lines,
+    as "tcp:1,3,7-9;udp:53". Empty string for host-only (Discovery) scans.
+    Lets later views tell "port closed now" apart from "port not checked"."""
+    try:
+        root = ET.parse(path).getroot()
+    except Exception:
+        return None
+    parts = [f"{si.get('protocol')}:{si.get('services')}"
+             for si in root.findall("scaninfo") if si.get("protocol") and si.get("services")]
+    return ";".join(parts)
+
+
+def _checked_set(ports_checked):
+    """'tcp:1,3,7-9' -> {('tcp', 1), ('tcp', 3), ('tcp', 7), ...}, or None
+    when unknown (scans recorded before this was stored)."""
+    if ports_checked is None:
+        return None
+    out = set()
+    for part in filter(None, ports_checked.split(";")):
+        proto, _, spec = part.partition(":")
+        for r in filter(None, spec.split(",")):
+            a, _, b = r.partition("-")
+            try:
+                lo, hi = int(a), int(b or a)
+            except ValueError:
+                continue
+            out.update((proto, n) for n in range(lo, hi + 1))
+    return out
+
+
+def _store_results(subnet, started, finished, hosts, profile=None, mode=None, ports_checked=None):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute(
-        "INSERT INTO scans (started_at, finished_at, subnet, host_count, profile, mode) "
-        "VALUES (?, ?, ?, ?, ?, ?)",
-        (started, finished, subnet, len(hosts), profile, mode),
+        "INSERT INTO scans (started_at, finished_at, subnet, host_count, profile, mode, ports_checked) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (started, finished, subnet, len(hosts), profile, mode, ports_checked),
     )
     scan_id = c.lastrowid
 
@@ -672,26 +706,105 @@ def _store_results(subnet, started, finished, hosts, profile=None, mode=None):
     return scan_id
 
 
+HISTORY_LOOKBACK = 50  # earlier scans consulted for "last seen" ports
+
+
 def get_latest_scan():
+    return get_scan(None)
+
+
+def get_scan(scan_id=None):
+    """One scan (default: the latest) with its hosts and ports. Each host
+    also gets "earlier": open ports found by previous scans that this scan
+    doesn't show as open, each marked
+      state "unchecked" -- this scan didn't look at that port (e.g. a
+                           Discovery scan, or Standard after Deep), or
+      state "closed"    -- this scan checked it and it wasn't open any more,
+    with when/which profile last saw it open. Hosts are matched across scans
+    by MAC address when known, otherwise by IP."""
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     c = conn.cursor()
-    c.execute("SELECT * FROM scans ORDER BY id DESC LIMIT 1")
+    if scan_id is None:
+        c.execute("SELECT * FROM scans ORDER BY id DESC LIMIT 1")
+    else:
+        c.execute("SELECT * FROM scans WHERE id = ?", (scan_id,))
     scan = c.fetchone()
     if not scan:
         conn.close()
         return None
 
-    c.execute("SELECT * FROM hosts WHERE scan_id = ?", (scan["id"],))
+    c.execute("SELECT * FROM hosts WHERE scan_id = ? ORDER BY id", (scan["id"],))
     hosts = []
     for h in c.fetchall():
         c.execute("SELECT * FROM ports WHERE host_id = ? ORDER BY port", (h["id"],))
-        ports = [dict(p) for p in c.fetchall()]
         host = dict(h)
-        host["ports"] = ports
+        host["ports"] = [dict(p) for p in c.fetchall()]
         hosts.append(host)
 
+    # Earlier scans, newest first, with each host's open ports
+    c.execute("SELECT id, finished_at, profile, ports_checked FROM scans WHERE id < ? "
+              "ORDER BY id DESC LIMIT ?", (scan["id"], HISTORY_LOOKBACK))
+    earlier_scans = [dict(r) for r in c.fetchall()]
+    by_scan = {}
+    if earlier_scans:
+        ids = [e["id"] for e in earlier_scans]
+        q = ",".join("?" * len(ids))
+        c.execute(f"SELECT h.scan_id, h.ip, h.mac, p.port, p.protocol, p.state, p.service, p.product, p.version "
+                  f"FROM hosts h LEFT JOIN ports p ON p.host_id = h.id WHERE h.scan_id IN ({q})", ids)
+        for r in c.fetchall():
+            entry = by_scan.setdefault(r["scan_id"], {})
+            key = ("mac", r["mac"].lower()) if r["mac"] else ("ip", r["ip"])
+            ports = entry.setdefault(key, {})
+            if r["port"] is not None and r["state"] == "open":
+                ports[(r["protocol"], r["port"])] = dict(r)
+            # also index by IP, for hosts whose MAC isn't known in one of the scans
+            entry.setdefault(("ip", r["ip"]), ports)
     conn.close()
+
+    cur_checked = _checked_set(scan["ports_checked"])
+    if cur_checked is None and scan["profile"] == "discovery":
+        cur_checked = set()
+    checked_cache = {}
+
+    for host in hosts:
+        key = ("mac", host["mac"].lower()) if host["mac"] else ("ip", host["ip"])
+        # every port this scan reported on (open, or closed/filtered listed by nmap)
+        open_now = {(p["protocol"], p["port"]) for p in host["ports"]}
+        decided = set()      # ports whose most recent earlier check we've already used
+        earlier = []
+        for es in earlier_scans:   # newest first
+            seen = by_scan.get(es["id"], {})
+            ports = seen.get(key) if key in seen else seen.get(("ip", host["ip"]))
+            if ports is None:
+                continue           # host not found in that scan: tells us nothing
+            if es["id"] not in checked_cache:
+                chk = _checked_set(es["ports_checked"])
+                if chk is None and es["profile"] == "discovery":
+                    chk = set()
+                checked_cache[es["id"]] = chk
+            chk = checked_cache[es["id"]]
+            # Ports this earlier scan saw open
+            for pk, row in ports.items():
+                if pk in decided or pk in open_now:
+                    continue
+                decided.add(pk)
+                if cur_checked is None or pk not in cur_checked:
+                    state = "unchecked"
+                else:
+                    state = "closed"
+                earlier.append({
+                    "port": pk[1], "protocol": pk[0], "service": row["service"],
+                    "product": row["product"], "version": row["version"],
+                    "state": state, "last_seen": es["finished_at"], "profile": es["profile"],
+                })
+            # Ports this earlier scan checked and found NOT open: older
+            # sightings of them are stale, so stop looking further back
+            if chk:
+                decided.update(pk for pk in chk if pk not in ports)
+        earlier.sort(key=lambda e: (e["state"] != "unchecked", e["port"]))
+        host["earlier"] = earlier
+
     result = dict(scan)
     result["hosts"] = hosts
     return result

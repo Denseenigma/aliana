@@ -123,6 +123,16 @@ capability is missing (e.g. nmap was upgraded -- re-run `setup.sh`), Aliana
 falls back to TCP connect scans without OS detection and says so on the
 dashboard ("Mode: Connect") and in the Pi screen's boot sequence.
 
+## Scan history and "last seen" ports
+
+Every scan is kept. Host cards show the current scan's results plus open
+ports found by earlier scans (matched by MAC, else IP): dimmed with "last
+seen <time> · <profile>" when this scan didn't check that port (e.g. a
+Discovery scan, or Standard after Deep), or struck through in red as
+"closed now" when it did check and the port is no longer open. Aliana
+records which ports each scan covered (nmap's scaninfo) to tell these
+apart. Click any row in Scan history to open that scan (`/scan/<id>`).
+
 ## What it does
 
 - Runs nmap (see Scan profiles) against the subnet detected on the
