@@ -23,7 +23,8 @@ def index():
     history = scanner.get_scan_history(limit=10)
     interfaces = scanner.list_interfaces()
     return render_template(
-        "index.html", scan=latest, status=status, history=history, interfaces=interfaces
+        "index.html", scan=latest, status=status, history=history, interfaces=interfaces,
+        profiles=scanner.PROFILES,
     )
 
 
@@ -31,6 +32,14 @@ def index():
 def scan_now():
     # Run in a background thread so the request returns immediately
     threading.Thread(target=scanner.run_scan, daemon=True).start()
+    return redirect(url_for("index"))
+
+
+@app.route("/profile/set", methods=["POST"])
+def set_profile():
+    name = request.form.get("profile")
+    if name in scanner.PROFILES and not scanner.get_status()["running"]:
+        scanner.set_profile(name)
     return redirect(url_for("index"))
 
 
@@ -70,6 +79,8 @@ def _kiosk_state():
         next_in = max(0, int(status["next_run"] - time.time()))
     return {
         "running": status["running"],
+        "profile": status["profile"],
+        "profile_label": scanner.PROFILES[status["profile"]]["label"],
         "error": status["last_error"],
         "interface": current,
         "interface_ip": iface_ip,
@@ -91,6 +102,16 @@ def api_scan():
     if not scanner.get_status()["running"]:
         threading.Thread(target=scanner.run_scan, daemon=True).start()
         time.sleep(0.2)  # let the scan flag flip so the response reflects it
+    return jsonify(_kiosk_state())
+
+
+@app.route("/api/profile/next", methods=["POST"])
+def api_profile_next():
+    """Cycles the scan profile (kiosk button). Ignored while scanning."""
+    if not scanner.get_status()["running"]:
+        names = list(scanner.PROFILES)
+        current = scanner.get_profile()
+        scanner.set_profile(names[(names.index(current) + 1) % len(names)])
     return jsonify(_kiosk_state())
 
 

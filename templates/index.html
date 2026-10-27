@@ -233,6 +233,15 @@
   .error-banner { border-radius: 0; background: #1a0000; }
   button.stop { background: var(--danger); }
   button.stop:hover { background: #ff5a5a; }
+  select.deep { border-color: var(--danger); color: var(--danger); }
+  select:disabled { opacity: 0.5; }
+  .profile-desc {
+    flex-basis: 100%;
+    font-size: 0.75rem;
+    color: var(--muted);
+    letter-spacing: 0.02em;
+  }
+  .profile-desc strong { color: var(--accent); text-transform: uppercase; letter-spacing: 0.08em; }
   button.stopping { background: #fff; color: var(--danger); animation: stopflash 0.5s steps(1) infinite; }
   @keyframes stopflash { 50% { opacity: 0.55; } }
   button.stopping:hover { background: #fff; }
@@ -284,10 +293,23 @@
       </select>
     </form>
 
+    <form action="{{ url_for('set_profile') }}" method="post" class="iface-form"
+          title="{{ profiles[status.profile].description }}">
+      <select name="profile" onchange="this.form.submit()" class="{{ 'deep' if status.profile == 'deep' else '' }}"
+              {{ 'disabled' if status.running else '' }}>
+        {% for key, p in profiles.items() %}
+        <option value="{{ key }}" {{ 'selected' if key == status.profile else '' }}>Profile: {{ p.label }}</option>
+        {% endfor %}
+      </select>
+    </form>
+
     <form id="scan-form" action="{{ url_for('scan_stop') if status.running else url_for('scan_now') }}" method="post"
           data-running="{{ '1' if status.running else '0' }}">
       <button type="submit" id="scan-btn" class="{{ 'stop' if status.running else '' }}">{{ 'Stop scan' if status.running else 'Scan now' }}</button>
     </form>
+  </div>
+  <div class="profile-desc">
+    <strong>{{ profiles[status.profile].label }}:</strong> {{ profiles[status.profile].description }}
   </div>
 </header>
 
@@ -346,7 +368,7 @@
         {% for h in history %}
         <div class="history-row">
           <span>{{ h.subnet }}</span>
-          <span>{{ h.host_count }} hosts</span>
+          <span>{{ h.host_count }} hosts{% if h.profile and h.profile in profiles %} &middot; {{ profiles[h.profile].label }}{% endif %}</span>
           <span style="color:var(--muted)">{{ h.finished_at or 'running' }}</span>
         </div>
         {% endfor %}

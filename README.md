@@ -121,6 +121,20 @@ ports as they're found), a summary of the last scan when idle, and two
 buttons -- Scan now, and cycle the scan interface. The full detail stays
 on the browser dashboard at `/`.
 
+## Scan profiles
+
+Pick a profile on the dashboard (dropdown) or the onboard screen (the
+profile button cycles Discovery -> Standard -> Deep). Locked while a scan
+is running. Each scan records which profile it used.
+
+| Profile | nmap options | Impact |
+|---|---|---|
+| Discovery | `-sn -T3` | Host sweep only (ARP/ping, MAC vendor, hostname). No port scan. |
+| Standard (default) | `-sV --version-light -T3 --top-ports 100 --max-rate 300 --host-timeout 5m` | Light, rate-capped. Fine for most office networks. |
+| Deep | `-sV -T3 --top-ports 1000 --max-rate 300 --host-timeout 15m` | Much more probing. Run deliberately; avoid on fragile/OT networks. |
+
+Profiles are defined in `PROFILES` at the top of `scanner.py`.
+
 ## Wi-Fi setup
 
 Open **Wi-Fi** from the dashboard header (`/wifi`) -- e.g. from your

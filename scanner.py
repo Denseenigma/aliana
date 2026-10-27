@@ -22,6 +22,35 @@ SCAN_INTERVAL_SECONDS = int(os.environ.get("ALIANA_SCAN_INTERVAL", "300"))  # 5 
 # (and its network links) can settle after boot
 FIRST_SCAN_DELAY_SECONDS = int(os.environ.get("ALIANA_FIRST_SCAN_DELAY", "60"))
 
+# Scan profiles, gentlest first. "args" are the nmap options that define
+# what each one does; output/progress options are added in run_scan().
+PROFILES = {
+    "discovery": {
+        "label": "Discovery",
+        "description": "Who's on the network: host sweep only (ARP/ping), MAC vendor, "
+                       "hostname. No port scan -- very low impact.",
+        "args": ["-sn", "-T3"],
+        "timeout": 300,
+    },
+    "standard": {
+        "label": "Standard",
+        "description": "Top 100 TCP ports with light version detection, normal timing, "
+                       "rate-capped. Safe for most office networks.",
+        "args": ["-sV", "--version-light", "-T3", "--top-ports", "100",
+                 "--max-rate", "300", "--host-timeout", "5m"],
+        "timeout": 1200,
+    },
+    "deep": {
+        "label": "Deep",
+        "description": "Top 1000 TCP ports with full version detection. Much more "
+                       "traffic and probing -- run deliberately, not on fragile/OT networks.",
+        "args": ["-sV", "-T3", "--top-ports", "1000",
+                 "--max-rate", "300", "--host-timeout", "15m"],
+        "timeout": 3600,
+    },
+}
+DEFAULT_PROFILE = "standard"
+
 _scan_lock = threading.Lock()
 _stop_requested = threading.Event()
 
@@ -216,6 +245,10 @@ def init_db():
             value TEXT
         )
     """)
+    # Older databases: add the scans.profile column
+    cols = [r[1] for r in c.execute("PRAGMA table_info(scans)")]
+    if "profile" not in cols:
+        c.execute("ALTER TABLE scans ADD COLUMN profile TEXT")
     # Clean up "down" hosts stored by earlier builds (nmap -v lists every
     # unresponsive address) and fix those scans' host counts.
     c.execute("DELETE FROM ports WHERE host_id IN (SELECT id FROM hosts WHERE status = 'down')")
@@ -262,6 +295,33 @@ def list_interfaces():
     return interfaces
 
 
+def _get_setting(key, default=None):
+    conn = sqlite3.connect(DB_PATH)
+    row = conn.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
+    conn.close()
+    return row[0] if row else default
+
+
+def _set_setting(key, value):
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute(
+        "INSERT INTO settings (key, value) VALUES (?, ?) "
+        "ON CONFLICT(key) DO UPDATE SET value = excluded.value", (key, value))
+    conn.commit()
+    conn.close()
+
+
+def get_profile():
+    name = _get_setting("profile", DEFAULT_PROFILE)
+    return name if name in PROFILES else DEFAULT_PROFILE
+
+
+def set_profile(name):
+    if name not in PROFILES:
+        raise ValueError(f"Unknown scan profile: {name}")
+    _set_setting("profile", name)
+
+
 def get_current_interface():
     """Returns the currently selected scan interface: DB setting if present,
     otherwise falls back to the ALIANA_IFACE env var / 'usb0' default."""
@@ -304,8 +364,9 @@ def get_local_subnet(interface=SCAN_INTERFACE):
     return None
 
 
-def run_scan(subnet=None, fast=True):
-    """Runs an nmap scan against the subnet and stores results. Returns scan_id or None."""
+def run_scan(subnet=None, profile=None):
+    """Runs an nmap scan against the subnet using a scan profile (default: the
+    saved one) and stores results. Returns scan_id or None."""
     if not _scan_lock.acquire(blocking=False):
         return None  # a scan is already running
 
@@ -317,7 +378,9 @@ def run_scan(subnet=None, fast=True):
         if not subnet:
             _last_scan_status["last_error"] = "No subnet detected to scan."
             return None
+        profile = profile if profile in PROFILES else get_profile()
         _reset_progress(subnet)
+        _progress["profile"] = profile
 
         started = datetime.datetime.now().isoformat()
         # Unique filename per scan (pid + uuid) so a leftover file from a
@@ -327,21 +390,19 @@ def run_scan(subnet=None, fast=True):
             tempfile.gettempdir(), f"aliana_scan_{os.getpid()}_{uuid.uuid4().hex}.xml"
         )
 
-        # -sV: version detection, -T4: faster timing, -oX: xml output
-        # fast=True keeps it to a light port set so it finishes quickly on a /24
+        # The profile decides what gets scanned and how hard (see PROFILES).
         # -v and --stats-every make nmap report progress as it goes (hosts
-        # found, ports discovered, % done), which the kiosk screen shows live
-        cmd = ["nmap", "-sV", "-T4", "-v", "--stats-every", "2s", "-oX", xml_path]
-        if fast:
-            cmd += ["--top-ports", "100"]
-        cmd.append(subnet)
+        # found, ports discovered, % done), which the kiosk screen shows live.
+        p = PROFILES[profile]
+        cmd = ["nmap"] + p["args"] + ["-v", "--stats-every", "2s", "-oX", xml_path, subnet]
 
-        _run_nmap_live(cmd, timeout=600)
+        timeout = p["timeout"]
+        _run_nmap_live(cmd, timeout=timeout)
 
         hosts = _parse_nmap_xml(xml_path)
         finished = datetime.datetime.now().isoformat()
 
-        scan_id = _store_results(subnet, started, finished, hosts)
+        scan_id = _store_results(subnet, started, finished, hosts, profile)
 
         _last_scan_status["last_run"] = finished
         _last_scan_status["last_error"] = None
@@ -352,7 +413,7 @@ def run_scan(subnet=None, fast=True):
         _last_scan_status["last_error"] = None
         return None
     except subprocess.TimeoutExpired:
-        _last_scan_status["last_error"] = "nmap timed out after 10 minutes."
+        _last_scan_status["last_error"] = f"nmap timed out after {timeout // 60} minutes."
         return None
     except Exception as e:
         _last_scan_status["last_error"] = str(e)
@@ -425,12 +486,12 @@ def _parse_nmap_xml(path):
     return hosts
 
 
-def _store_results(subnet, started, finished, hosts):
+def _store_results(subnet, started, finished, hosts, profile=None):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute(
-        "INSERT INTO scans (started_at, finished_at, subnet, host_count) VALUES (?, ?, ?, ?)",
-        (started, finished, subnet, len(hosts)),
+        "INSERT INTO scans (started_at, finished_at, subnet, host_count, profile) VALUES (?, ?, ?, ?, ?)",
+        (started, finished, subnet, len(hosts), profile),
     )
     scan_id = c.lastrowid
 
@@ -490,6 +551,7 @@ def get_scan_history(limit=20):
 def get_status():
     status = dict(_last_scan_status)
     status["interface"] = get_current_interface()
+    status["profile"] = get_profile()
     return status
 
 
@@ -519,12 +581,12 @@ def get_latest_summary():
     """Small summary of the most recent finished scan, for the kiosk screen."""
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute("SELECT id, finished_at, subnet, host_count FROM scans ORDER BY id DESC LIMIT 1")
+    c.execute("SELECT id, finished_at, subnet, host_count, profile FROM scans ORDER BY id DESC LIMIT 1")
     row = c.fetchone()
     if not row:
         conn.close()
         return None
-    scan_id, finished_at, subnet, host_count = row
+    scan_id, finished_at, subnet, host_count, profile = row
     c.execute(
         "SELECT COUNT(*) FROM ports p JOIN hosts h ON p.host_id = h.id "
         "WHERE h.scan_id = ? AND p.state = 'open'", (scan_id,))
@@ -547,6 +609,7 @@ def get_latest_summary():
         "open_ports": open_ports,
         "services": services,
         "ago": ago,
+        "profile": PROFILES.get(profile, {}).get("label") if profile else None,
     }
 
 

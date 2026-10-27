@@ -248,7 +248,7 @@
   /* Controls */
   .controls {
     display: grid;
-    grid-template-columns: 2fr 1fr 1fr;
+    grid-template-columns: 5fr 3fr 3fr 3fr;
     gap: 5px;
   }
   button {
@@ -267,8 +267,8 @@
     background: transparent;
     color: var(--orange);
     font-family: var(--cond);
-    font-size: 14px;
-    letter-spacing: 0.1em;
+    font-size: 13px;
+    letter-spacing: 0.05em;
     box-shadow: inset 0 0 0 1px var(--line);
     clip-path: none;
   }
@@ -350,6 +350,9 @@
   .sig i.on { background: var(--green); }
   .wifi-hint { margin-top: auto; font-size: 10px; letter-spacing: 0.08em; color: var(--orange); line-height: 13px; }
   .wifi-url { font-family: var(--mono); font-size: 11px; color: var(--text); text-transform: none; word-break: break-all; }
+  /* Deep profile: flag it so it's never selected by accident */
+  #profile-btn.deep { color: var(--red); box-shadow: inset 0 0 0 1px var(--red); }
+  #profile-btn.deep:disabled { color: #5a1010; box-shadow: inset 0 0 0 1px #5a1010; }
   #scan-btn.stopping {
     background: #fff;
     color: var(--red);
@@ -398,6 +401,7 @@
 <section class="controls">
   <button id="scan-btn" type="button">SCAN NOW</button>
   <button id="iface-btn" class="secondary" type="button">IFACE &#x21bb;</button>
+  <button id="profile-btn" class="secondary" type="button">STANDARD</button>
   <button id="wifi-btn" class="secondary" type="button">WI-FI</button>
 </section>
 
@@ -517,7 +521,7 @@
     // Feed
     var feed = $("feed"), html = "";
     if (s.running && p) {
-      html = '<div class="feed-title">Live — ' + esc(p.subnet) + "</div>";
+      html = '<div class="feed-title">Live — ' + esc(s.profile_label) + " — " + esc(p.subnet) + "</div>";
       if (!p.recent.length) {
         html += '<div class="muted">No open ports found yet…</div>';
       }
@@ -532,7 +536,7 @@
       html = '<div class="feed-title">Error</div><div class="error">' + esc(s.error) + "</div>";
     } else if (latest) {
       seenRecent = {};
-      html = '<div class="feed-title">Top services — ' + esc(latest.subnet) + "</div>";
+      html = '<div class="feed-title">Top services — ' + (latest.profile ? esc(latest.profile) + " — " : "") + esc(latest.subnet) + "</div>";
       if (latest.services.length) {
         html += '<div class="chips">' + latest.services.map(function (sv) {
           return '<div class="chip">' + esc(sv.name) + "<span>" + sv.count + "</span></div>";
@@ -563,6 +567,9 @@
     }
     btn.disabled = stopping;
     $("iface-btn").disabled = s.running || s.interfaces.length < 2;
+    $("profile-btn").textContent = s.profile_label.toUpperCase();
+    $("profile-btn").className = "secondary" + (s.profile === "deep" ? " deep" : "");
+    $("profile-btn").disabled = s.running;
   }
 
   function apply(data) {
@@ -690,6 +697,9 @@
     clearInterval(wifiTimer);
   });
 
+  $("profile-btn").addEventListener("click", function () {
+    post("/api/profile/next");
+  });
   $("iface-btn").addEventListener("click", function () {
     post("/api/interface/next");
   });
