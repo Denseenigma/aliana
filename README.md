@@ -107,7 +107,7 @@ used only before anything's been selected in the UI:
 
 Automatic scans are **off by default** -- nothing touches the network until
 you press Scan now or switch auto-scan on. Turn it on (and pick 5 / 15 / 30 /
-60 min) from the dashboard's "Auto-scan" dropdown. The setting is saved, so it survives restarts. The first automatic
+60 min) on the Settings page. The setting is saved, so it survives restarts. The first automatic
 scan runs a minute after switching on (or after boot); after that, the
 interval is counted from the end of the last scan -- a manual scan resets
 the countdown too. Automatic scans use the selected profile.
@@ -121,6 +121,33 @@ and on the **Deep** profile, OS fingerprinting (`-O --osscan-limit
 capability is missing (e.g. nmap was upgraded -- re-run `setup.sh`), Aliana
 falls back to TCP connect scans without OS detection and says so on the
 dashboard ("Mode: Connect") and in the Pi screen's boot sequence.
+
+## Settings page
+
+`/settings` (Settings in the dashboard menu) holds options that apply to
+every scan; changes save immediately:
+
+- **Auto-scan** -- off, or every 5 / 15 / 30 / 60 min (off by default).
+- **Never-probe ports** -- add/remove ports or ranges that are reported as
+  open but never get service-identification probes (default `9999`;
+  `ALIANA_NO_PROBE_PORTS` sets the default for a fresh install).
+
+## Two-stage scans (no more hangs on silent devices)
+
+Standard and Deep scans run in two stages:
+
+1. **Find ports** -- port scan (plus OS guess on Deep). These results are
+   always kept.
+2. **Identify services** -- `nmap -sV` on just the open ports found, with a
+   per-host time cap (Standard 2 min, Deep 5 min). Never-probe ports are
+   left out entirely.
+
+Some devices (e.g. Paxton door-access controllers on 9999) accept a
+connection and then never answer, which made nmap wait out dozens of probes
+per port and could time a whole host out. Now such ports show as
+*Not identified* (or *Not probed · skip list*) instead of stalling the scan,
+and stopping a job during "Identifying services" saves the ports already
+found (the Queue page's button reads "Stop identifying · keep ports").
 
 ## Scan queue
 

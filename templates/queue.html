@@ -242,7 +242,7 @@
     </svg>
     Aliana <small>scan queue</small>
   </h1>
-  <nav class="nav"><a href="/">Dashboard</a><a href="/queue" class="on">Queue</a><a href="/wifi">Wi-Fi</a></nav>
+  <nav class="nav"><a href="/">Dashboard</a><a href="/queue" class="on">Queue</a><a href="/settings">Settings</a><a href="/wifi">Wi-Fi</a></nav>
 
   <div class="controls">
     <div class="state" id="state"><span class="dot"></span><span id="state-t">&hellip;</span></div>
@@ -391,7 +391,10 @@
         "</div>" +
         (found ? '<div class="found">' + found + "</div>" : "") +
         '<div style="margin-top:12px"><button type="button" class="' + (stopArmed === r.id ? "stopping" : "stop") +
-        '" id="stop-btn">' + (stopArmed === r.id ? "Click again to stop" : "Stop this job") + "</button></div>";
+        '" id="stop-btn">' + (stopArmed === r.id ? "Click again to stop"
+          : p.stage === 2 ? "Stop identifying \u00b7 keep ports" : "Stop this job") + "</button>" +
+        (p.stage === 2 ? '<span class="kv" style="margin-left:12px">Ports are found \u2014 stopping now saves them</span>' : "") +
+        "</div>";
     }
 
     // waiting

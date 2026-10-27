@@ -4,6 +4,7 @@ Runs nmap scans against a subnet (by default, whatever's on usb0) and
 shows the results in a web UI, with history.
 """
 import datetime
+import re
 import socket
 import subprocess
 import threading
@@ -212,6 +213,64 @@ def api_scan():
         scanner.enqueue("subnet", source="manual")
         time.sleep(0.3)  # let the worker start it so the response reflects it
     return jsonify(_kiosk_state())
+
+
+# ---------------------------------------------------------------- settings
+
+def _settings_state():
+    return {
+        "auto_scan": scanner.get_auto_scan(),
+        "scan_interval": scanner.get_scan_interval(),
+        "intervals": [{"seconds": sec, "label": _interval_label(sec)} for sec in scanner.INTERVAL_CHOICES],
+        "next_in": scanner.next_scan_in(),
+        "no_probe_ports": scanner._format_port_list(scanner.get_no_probe_ports()),
+        "no_probe_default": scanner._format_port_list(
+            scanner._parse_port_list(scanner.NO_PROBE_PORTS_DEFAULT)),
+        "profile": scanner.get_profile(),
+        "profile_label": scanner.PROFILES[scanner.get_profile()]["label"],
+        "mode": scanner.scan_mode(),
+    }
+
+
+_PORT_TOKEN = re.compile(r"^\d{1,5}(-\d{1,5})?$")
+
+
+@app.route("/settings")
+def settings_page():
+    return render_template("settings.html", settings=_settings_state(), status=scanner.get_status())
+
+
+@app.route("/api/settings", methods=["GET", "POST"])
+def api_settings():
+    """GET: current settings. POST JSON with any of:
+      {"auto_scan": true/false, "scan_interval": seconds,
+       "no_probe_ports": ["9999", "10001-10003"]}"""
+    if request.method == "POST":
+        data = request.get_json(silent=True) or {}
+        if "scan_interval" in data or "auto_scan" in data:
+            try:
+                scanner.set_auto_scan(
+                    enabled=bool(data["auto_scan"]) if "auto_scan" in data else None,
+                    interval=int(data["scan_interval"]) if data.get("scan_interval") is not None else None)
+            except (TypeError, ValueError):
+                return jsonify({"ok": False, "error": "Unsupported interval."}), 400
+        if "no_probe_ports" in data:
+            items = data["no_probe_ports"]
+            if isinstance(items, str):
+                items = items.split(",")
+            bad = []
+            for tok in (str(x).strip() for x in items):
+                if not tok:
+                    continue
+                a, _, b = tok.partition("-")
+                if (not _PORT_TOKEN.match(tok) or not 1 <= int(a) <= 65535
+                        or (b and not int(a) <= int(b) <= 65535)):
+                    bad.append(tok)
+            if bad:
+                return jsonify({"ok": False, "error": "Not a valid port or range: " + ", ".join(bad)}), 400
+            scanner.set_no_probe_ports(items)
+        time.sleep(0.1)  # let the auto-scan loop publish a new countdown
+    return jsonify({"ok": True, "settings": _settings_state()})
 
 
 # ---------------------------------------------------------------- job queue

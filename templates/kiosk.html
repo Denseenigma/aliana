@@ -1281,7 +1281,7 @@
     } else if (o === "complete" && data.latest) {
       sub = data.latest.hosts + " HOSTS · " + data.latest.open_ports + " OPEN PORTS";
     } else if (o === "stopped") {
-      sub = "SCAN STOPPED BY OPERATOR";
+      sub = lj.partial ? "STOPPED · OPEN PORTS SAVED" : "SCAN STOPPED BY OPERATOR";
     } else if (o === "failed") {
       sub = "SEE ERROR BELOW";
     }

@@ -1,0 +1,403 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Aliana Settings</title>
+<style>
+  /* Fonts: "Aliana Title" / "Aliana Sans", SIL OFL 1.1 -- see static/fonts/LICENSE-*.txt */
+  @font-face {
+    font-family: "Aliana Title";
+    src: url("/static/fonts/AlianaTitle.otf") format("opentype");
+    font-weight: 100 900;
+    font-display: block;
+  }
+  @font-face {
+    font-family: "Aliana Sans";
+    src: url("/static/fonts/AlianaSans.otf") format("opentype");
+    font-weight: 100 900;
+    font-display: block;
+  }
+
+  /* Theme: NERV-terminal inspired -- matches index.html / kiosk.html */
+  :root {
+    --bg: #000;
+    --panel: #0b0603;
+    --border: #6b3200;
+    --text: #ffd9b0;
+    --muted: #b06a2c;
+    --accent: #ff7a00;
+    --green: #50ff50;
+    --cyan: #00e5ff;
+    --red: #ff2626;
+    --title: "Aliana Title", "Times New Roman", serif;
+    --sans: "Aliana Sans", "DejaVu Sans Condensed", "Arial Narrow", sans-serif;
+    --mono: ui-monospace, "SF Mono", "Cascadia Code", Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 24px;
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 0.03em;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='28' height='48' viewBox='0 0 28 48'%3E%3Cpath d='M14 0 L28 8 L28 24 L14 32 L0 24 L0 8 Z M14 32 L14 48' fill='none' stroke='%23ff7a00' stroke-opacity='0.06'/%3E%3C/svg%3E");
+  }
+  .wrap { max-width: 1280px; margin: 0 auto; }
+  .muted { color: var(--muted); }
+
+  /* ---------- Header ---------- */
+  header {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 12px 16px;
+    position: relative;
+    padding-bottom: 22px;
+    margin-bottom: 22px;
+  }
+  header::after {
+    content: "";
+    position: absolute;
+    left: 0; right: 0; bottom: 0;
+    height: 8px;
+    background: repeating-linear-gradient(-45deg, var(--accent) 0 8px, #000 8px 16px);
+    opacity: 0.8;
+  }
+  h1 {
+    margin: 0;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    background: var(--accent);
+    color: #000;
+    font-family: var(--title);
+    font-weight: normal;
+    font-size: 2.4rem;
+    line-height: 1;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+    padding: 4px 30px 2px 12px;
+    clip-path: polygon(0 0, 100% 0, calc(100% - 16px) 100%, 0 100%);
+    text-shadow: 0 0 8px rgba(255, 122, 0, 0.35);
+  }
+  h1 svg { width: 30px; height: 26px; flex-shrink: 0; }
+  h1 small { font-family: var(--sans); font-size: 0.85rem; letter-spacing: 0.2em; opacity: 0.75; }
+  .nav { display: flex; gap: 4px; margin-left: auto; }
+  .nav a {
+    color: var(--accent);
+    text-decoration: none;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    font-size: 0.95rem;
+    padding: 7px 14px;
+    border: 1px solid var(--border);
+  }
+  .nav a.on { background: var(--accent); color: #000; border-color: var(--accent); }
+
+  .controls { flex-basis: 100%; display: flex; align-items: center; flex-wrap: wrap; gap: 10px 14px; }
+  .state {
+    display: flex; align-items: center; gap: 8px;
+    font-family: var(--title); font-size: 1.6rem; line-height: 1;
+    color: var(--accent); text-transform: uppercase; min-width: 130px;
+  }
+  .state.running { color: var(--red); }
+  .state.paused { color: var(--muted); }
+  .dot { width: 9px; height: 9px; background: var(--green); box-shadow: 0 0 6px var(--green); }
+  .state.running .dot { background: var(--red); box-shadow: 0 0 6px var(--red); animation: blink 0.8s steps(1) infinite; }
+  .state.paused .dot { background: var(--muted); box-shadow: none; }
+  @keyframes blink { 50% { opacity: 0; } }
+  .kv { font-size: 0.85rem; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); }
+  .kv b { color: var(--text); font-weight: inherit; margin-left: 4px; }
+  .spacer { flex: 1; }
+
+  input, select {
+    background: #000;
+    color: var(--accent);
+    border: 1px solid var(--accent);
+    padding: 8px 10px;
+    font-family: var(--sans);
+    font-size: 0.95rem;
+    letter-spacing: 0.05em;
+  }
+  input { width: 150px; font-family: var(--mono); letter-spacing: 0; }
+  input::placeholder { color: var(--border); }
+  button {
+    background: var(--accent);
+    color: #000;
+    border: none;
+    font-family: var(--title);
+    font-size: 1.15rem;
+    line-height: 1;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    padding: 8px 22px 6px 14px;
+    cursor: pointer;
+    clip-path: polygon(0 0, 100% 0, 100% calc(100% - 9px), calc(100% - 9px) 100%, 0 100%);
+  }
+  button:hover { background: #ffa040; }
+  button.ghost { background: transparent; color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+  button.ghost:hover { background: var(--accent); color: #000; }
+  button.red { background: transparent; color: var(--red); box-shadow: inset 0 0 0 1px var(--red); }
+  button.red:hover { background: var(--red); color: #000; }
+  button.stop { background: var(--red); }
+  button.stopping { background: #fff; color: var(--red); animation: stopflash 0.5s steps(1) infinite; }
+  @keyframes stopflash { 50% { opacity: 0.55; } }
+  button.sm { font-family: var(--sans); font-size: 0.75rem; letter-spacing: 0.12em; padding: 5px 12px 4px 10px; }
+  button:disabled { opacity: 0.4; cursor: default; }
+
+  .msg { display: none; border: 1px solid var(--red); border-left: 6px solid var(--red); background: #1a0000;
+         color: var(--red); padding: 10px 14px; margin-bottom: 20px; letter-spacing: 0.06em; }
+  .msg.show { display: block; }
+  .msg.ok { border-color: var(--green); color: var(--green); background: #001a00; }
+
+  /* ---------- Panels ---------- */
+  .grid { display: grid; grid-template-columns: minmax(0, 1fr) 420px; gap: 22px; align-items: start; }
+  @media (max-width: 1000px) { .grid { grid-template-columns: 1fr; } }
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--accent);
+    padding: 16px 18px 18px;
+    margin-bottom: 22px;
+    clip-path: polygon(0 0, calc(100% - 16px) 0, 100% 16px, 100% 100%, 0 100%);
+  }
+  .panel.live { border-left-color: var(--red); }
+  .panel-head { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; margin-bottom: 14px; }
+  .panel-head .kv { margin-left: auto; }
+  h2 {
+    margin: 0; background: var(--accent); color: #000; font-family: var(--sans); font-weight: inherit;
+    font-size: 0.95rem; letter-spacing: 0.14em; text-transform: uppercase; padding: 3px 12px 2px;
+  }
+  .panel.live h2 { background: var(--red); }
+  .empty { color: var(--muted); letter-spacing: 0.06em; padding: 4px 0; }
+
+  .tag {
+    display: inline-block; font-size: 0.72rem; letter-spacing: 0.12em; text-transform: uppercase;
+    padding: 2px 7px 1px; background: var(--accent); color: #000; vertical-align: middle; white-space: nowrap;
+  }
+  .tag.discovery { background: var(--cyan); }
+  .tag.deep { background: var(--red); }
+  .tag.outline { background: transparent; color: var(--muted); box-shadow: inset 0 0 0 1px var(--border); }
+  .tag.done { background: transparent; color: var(--green); box-shadow: inset 0 0 0 1px var(--green); }
+  .tag.failed { background: transparent; color: var(--red); box-shadow: inset 0 0 0 1px var(--red); }
+  .tag.stopped { background: transparent; color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+  .tag.cancelled { background: transparent; color: var(--muted); box-shadow: inset 0 0 0 1px var(--border); }
+
+  /* Running job */
+  .run-top { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px 14px; }
+  .run-target { font-family: var(--title); font-size: 2.2rem; line-height: 1; color: var(--accent); }
+  .run-phase { font-family: var(--title); font-size: 1.3rem; color: var(--red); text-transform: uppercase; margin-top: 10px; }
+  .bar { height: 10px; border: 1px solid var(--border); margin: 8px 0 12px; position: relative; overflow: hidden; }
+  .bar i { position: absolute; left: 0; top: 0; bottom: 0; background: var(--red); }
+  .bar.ind i { width: 30% !important; animation: slide 1.4s linear infinite; }
+  @keyframes slide { from { left: -30%; } to { left: 100%; } }
+  .stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-bottom: 12px; }
+  .stat { border: 1px solid var(--accent); background: #000; }
+  .stat .label { display: inline-block; background: var(--accent); color: #000; font-size: 0.72rem;
+                 letter-spacing: 0.12em; text-transform: uppercase; padding: 2px 8px 1px; }
+  .stat .num { font-family: var(--title); font-size: 2rem; line-height: 1.1; text-align: right; padding: 2px 12px 4px; }
+  .found { font-family: var(--mono); font-size: 0.85rem; color: var(--green); }
+  .found span { color: var(--muted); }
+
+  /* Job rows */
+  .jobs { display: flex; flex-direction: column; }
+  .job {
+    display: grid;
+    grid-template-columns: 34px minmax(0, 1fr) auto;
+    gap: 2px 12px;
+    align-items: center;
+    padding: 10px 0;
+    border-bottom: 1px solid rgba(107, 50, 0, 0.6);
+  }
+  .job:last-child { border-bottom: none; }
+  .job .pos { font-family: var(--title); font-size: 1.6rem; line-height: 1; color: var(--accent); text-align: center; }
+  .job .what { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; }
+  .job .t { font-family: var(--title); font-size: 1.3rem; line-height: 1; color: var(--text); }
+  .job .sub { grid-column: 2; color: var(--muted); font-size: 0.8rem; letter-spacing: 0.06em; }
+  .job .sub a { color: var(--accent); }
+  .job .sub .err { color: var(--red); }
+  .job .act { display: flex; gap: 6px; grid-row: 1 / span 2; grid-column: 3; }
+  .recent .job { grid-template-columns: minmax(0, 1fr) auto; }
+  .recent .job .sub { grid-column: 1; }
+  .recent .job .act { grid-column: 2; }
+  .add { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .hint { color: var(--muted); font-size: 0.8rem; letter-spacing: 0.04em; margin-top: 10px; }
+
+  /* ---------- Settings ---------- */
+  .settings { display: grid; grid-template-columns: repeat(auto-fit, minmax(420px, 1fr)); gap: 22px; align-items: start; }
+  @media (max-width: 520px) { .settings { grid-template-columns: 1fr; } }
+  .panel p.desc { margin: 0 0 14px; color: var(--muted); font-size: 0.88rem; letter-spacing: 0.03em; line-height: 1.45; }
+  .panel p.desc b { color: var(--text); font-weight: inherit; }
+  .opts { display: flex; flex-wrap: wrap; gap: 6px; }
+  .opt {
+    background: transparent; color: var(--muted); box-shadow: inset 0 0 0 1px var(--border);
+    font-family: var(--sans); font-size: 0.85rem; letter-spacing: 0.12em; padding: 9px 16px 8px 12px;
+  }
+  .opt:hover { background: transparent; color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+  .opt.on { background: var(--green); color: #000; box-shadow: none; }
+  .opt.off.on { background: var(--accent); }
+  .readout { margin-top: 14px; font-size: 0.85rem; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); }
+  .readout b { color: var(--text); font-weight: inherit; }
+  .readout b.ok { color: var(--green); }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; min-height: 34px; margin-bottom: 14px; }
+  .chip {
+    display: inline-flex; align-items: center; gap: 8px; padding: 0 0 0 10px; height: 32px;
+    border: 1px solid var(--accent); font-family: var(--mono); font-size: 0.95rem; color: var(--text);
+  }
+  .chip button {
+    height: 100%; padding: 0 10px; background: transparent; color: var(--accent); font-family: var(--sans);
+    font-size: 1rem; clip-path: none; border-left: 1px solid var(--border);
+  }
+  .chip button:hover { background: var(--red); color: #000; }
+  .settings input { width: 210px; }
+  .saved { color: var(--green); font-size: 0.8rem; letter-spacing: 0.1em; text-transform: uppercase; opacity: 0; transition: opacity 0.3s; }
+  .saved.show { opacity: 1; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>
+    <svg viewBox="0 0 120 100" xmlns="http://www.w3.org/2000/svg" fill="currentColor" aria-hidden="true">
+      <path d="M30 70 L10 85 L35 78 Z"/>
+      <ellipse cx="55" cy="60" rx="22" ry="14" transform="rotate(-10 55 60)"/>
+      <path d="M50 50 C40 20, 70 15, 85 35 C70 30, 55 35, 50 50 Z"/>
+      <circle cx="82" cy="45" r="11"/>
+      <path d="M92 45 L104 42 L92 50 Z"/>
+      <path d="M60 72 L58 88 M68 73 L70 89" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"/>
+    </svg>
+    Aliana <small>settings</small>
+  </h1>
+  <nav class="nav"><a href="/">Dashboard</a><a href="/queue">Queue</a><a href="/settings" class="on">Settings</a><a href="/wifi">Wi-Fi</a></nav>
+  <div class="controls">
+    <span class="kv">Changes save as you make them</span>
+    <span class="spacer"></span>
+    <span class="saved" id="saved">Saved</span>
+  </div>
+</header>
+
+<div class="msg" id="msg"></div>
+
+<div class="settings">
+  <section class="panel">
+    <div class="panel-head"><h2>Auto-scan</h2></div>
+    <p class="desc">Runs a network scan on a schedule, using the profile selected on the dashboard
+      (now <b id="prof">{{ settings.profile_label }}</b>). Automatic scans join the same queue as everything
+      else. The first one runs a minute after switching on; after that the interval counts from the end of
+      the last network scan.</p>
+    <div class="opts" id="auto-opts"></div>
+    <div class="readout" id="auto-readout"></div>
+  </section>
+
+  <section class="panel">
+    <div class="panel-head"><h2>Never-probe ports</h2></div>
+    <p class="desc">Ports that are still <b>reported as open</b> but never get service-identification probes.
+      Use this for devices that accept a connection and then go silent (e.g. door-access controllers on
+      9999), which otherwise stall the "Identifying services" stage and can upset small embedded devices.
+      Takes effect from the next scan.</p>
+    <div class="chips" id="chips"></div>
+    <div class="add">
+      <input id="port-in" placeholder="9999 or 10001-10003" autocomplete="off" spellcheck="false">
+      <button type="button" id="port-add">Add</button>
+      <button type="button" class="ghost sm" id="port-reset">Reset to default</button>
+    </div>
+    <div class="hint">Default: <span id="port-default"></span>. Comma-separate to add several at once.</div>
+  </section>
+</div>
+
+</div>
+
+<script>
+(function () {
+  var $ = function (id) { return document.getElementById(id); };
+  var S = {{ settings | tojson }};
+
+  function esc(s) {
+    return String(s == null ? "" : s).replace(/[&<>"]/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c];
+    });
+  }
+  function flash(text) {
+    var m = $("msg");
+    m.textContent = text;
+    m.className = "msg show";
+    clearTimeout(m._t);
+    m._t = setTimeout(function () { m.className = "msg"; }, 5000);
+  }
+  function saved() {
+    var el = $("saved");
+    el.className = "saved show";
+    clearTimeout(el._t);
+    el._t = setTimeout(function () { el.className = "saved"; }, 1500);
+  }
+  function save(body) {
+    return fetch("/api/settings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body)
+    })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (!d.ok) { flash(d.error || "Couldn't save."); return false; }
+        S = d.settings; render(); saved(); return true;
+      })
+      .catch(function () { flash("Aliana isn't responding."); return false; });
+  }
+
+  function render() {
+    $("prof").textContent = S.profile_label;
+    var opts = [{ v: "off", label: "Off", on: !S.auto_scan }].concat(S.intervals.map(function (iv) {
+      return { v: iv.seconds, label: "Every " + iv.label, on: S.auto_scan && iv.seconds === S.scan_interval };
+    }));
+    $("auto-opts").innerHTML = opts.map(function (o) {
+      return '<button type="button" class="opt' + (o.v === "off" ? " off" : "") + (o.on ? " on" : "") +
+        '" data-v="' + o.v + '">' + esc(o.label) + "</button>";
+    }).join("");
+    var r = "Status <b" + (S.auto_scan ? ' class="ok"' : "") + ">" + (S.auto_scan ? "On" : "Off") + "</b>";
+    if (S.auto_scan && S.next_in != null) {
+      r += " &nbsp;&middot;&nbsp; Next scan in <b>" + Math.floor(S.next_in / 60) + ":" + ("0" + S.next_in % 60).slice(-2) + "</b>";
+    }
+    $("auto-readout").innerHTML = r;
+
+    $("chips").innerHTML = S.no_probe_ports.length ? S.no_probe_ports.map(function (p) {
+      return '<span class="chip">' + esc(p) + '<button type="button" data-rm="' + esc(p) + '" title="Remove">&times;</button></span>';
+    }).join("") : '<span class="empty">None &mdash; every open port gets probed.</span>';
+    $("port-default").textContent = S.no_probe_default.length ? S.no_probe_default.join(", ") : "none";
+  }
+
+  document.addEventListener("click", function (e) {
+    var b = e.target.closest("button");
+    if (!b) return;
+    if (b.hasAttribute("data-v")) {
+      var v = b.getAttribute("data-v");
+      save(v === "off" ? { auto_scan: false } : { auto_scan: true, scan_interval: parseInt(v, 10) });
+    } else if (b.hasAttribute("data-rm")) {
+      var rm = b.getAttribute("data-rm");
+      save({ no_probe_ports: S.no_probe_ports.filter(function (p) { return p !== rm; }) });
+    } else if (b.id === "port-add") {
+      var add = $("port-in").value.split(",").map(function (x) { return x.trim(); }).filter(Boolean);
+      if (!add.length) { $("port-in").focus(); return; }
+      save({ no_probe_ports: S.no_probe_ports.concat(add) }).then(function (ok) { if (ok) $("port-in").value = ""; });
+    } else if (b.id === "port-reset") {
+      save({ no_probe_ports: S.no_probe_default });
+    }
+  });
+  $("port-in").addEventListener("keydown", function (e) { if (e.key === "Enter") $("port-add").click(); });
+
+  // keep the countdown fresh
+  setInterval(function () {
+    fetch("/api/settings", { cache: "no-store" }).then(function (r) { return r.json(); })
+      .then(function (d) { if (d.ok) { S = d.settings; render(); } }).catch(function () {});
+  }, 5000);
+  setInterval(function () {
+    if (S.auto_scan && S.next_in > 0) { S.next_in -= 1; render(); }
+  }, 1000);
+  render();
+})();
+</script>
+</body>
+</html>

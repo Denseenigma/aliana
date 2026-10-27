@@ -298,6 +298,9 @@
   tr.earlier td.port { color: var(--muted); }
   tr.earlier.closed td { opacity: 0.8; }
   tr.earlier.closed td.port { color: var(--red); text-decoration: line-through; }
+  tr.unprobed td.port { color: var(--accent); }
+  td .q { color: var(--muted); margin-left: 2px; }
+  .probe-note { font-size: 0.72rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
   tr.earlier .seen { display: block; font-size: 0.72rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
   tr.earlier.closed .seen { color: var(--red); }
   .nav a .qbadge { display: inline-block; margin-left: 6px; min-width: 18px; padding: 0 5px; background: var(--accent); color: #000; text-align: center; letter-spacing: 0; }
@@ -449,7 +452,7 @@
     </svg>
     Aliana <small>network recon</small>
   </h1>
-  <nav class="nav"><a href="/" class="on">Dashboard</a><a href="/queue">Queue<span class="qbadge" id="qbadge" {% if not (status.queue.queued + (1 if status.queue.current else 0)) %}hidden{% endif %}>{{ (status.queue.queued + (1 if status.queue.current else 0)) }}</span></a><a href="/wifi">Wi-Fi</a><button type="button" class="screen-btn" id="mirror-open-btn" title="Live, interactive view of the Pi's onboard screen"><span class="dot"></span>Pi screen</button></nav>
+  <nav class="nav"><a href="/" class="on">Dashboard</a><a href="/queue">Queue<span class="qbadge" id="qbadge" {% if not (status.queue.queued + (1 if status.queue.current else 0)) %}hidden{% endif %}>{{ (status.queue.queued + (1 if status.queue.current else 0)) }}</span></a><a href="/settings">Settings</a><a href="/wifi">Wi-Fi</a><button type="button" class="screen-btn" id="mirror-open-btn" title="Live, interactive view of the Pi's onboard screen"><span class="dot"></span>Pi screen</button></nav>
 
   <div class="controls">
     <div class="state {{ 'running' if status.running else '' }}">
@@ -460,17 +463,9 @@
     {% if status.queue.queued or status.queue.paused %}<a class="kv qlink" href="/queue">Queue <b>{{ status.queue.queued }} waiting{% if status.queue.paused %} &middot; paused{% endif %}</b></a>{% endif %}
     <span class="kv">Last run <b>{{ status.last_run | when }}</b></span>
     <span class="kv" title="{{ 'Raw sockets: ARP discovery, SYN scans, OS detection on Deep' if status.mode == 'syn' else 'No raw sockets: TCP connect scans, no OS detection (re-run setup.sh)' }}">Mode <b class="{{ 'ok' if status.mode == 'syn' else 'warn' }}">{{ 'SYN' if status.mode == 'syn' else 'Connect' }}</b></span>
-    <span class="kv">Auto-scan <b id="next-auto" data-next="{{ status.next_in if status.next_in is not none else '' }}">{% if not status.auto_scan %}off{% elif status.running %}after this scan{% elif status.next_in is not none %}in {{ (status.next_in // 60) }}:{{ '%02d' % (status.next_in % 60) }}{% else %}scheduled{% endif %}</b></span>
+    <a class="kv qlink" href="/settings" title="Change in Settings">Auto-scan <b id="next-auto" data-next="{{ status.next_in if status.next_in is not none else '' }}">{% if not status.auto_scan %}off{% elif status.running %}after this scan{% elif status.next_in is not none %}in {{ (status.next_in // 60) }}:{{ '%02d' % (status.next_in % 60) }}{% else %}scheduled{% endif %}</b></a>
     <span class="spacer"></span>
 
-    <form action="{{ url_for('set_autoscan') }}" method="post" title="Automatic scans run on this interval using the selected profile">
-      <select name="autoscan" onchange="this.form.submit()" class="{{ 'auto-on' if status.auto_scan else 'auto-off' }}">
-        <option value="off" {{ 'selected' if not status.auto_scan else '' }}>Auto-scan: Off</option>
-        {% for sec, label in intervals %}
-        <option value="{{ sec }}" {{ 'selected' if status.auto_scan and sec == status.scan_interval else '' }}>Auto-scan: every {{ label }}</option>
-        {% endfor %}
-      </select>
-    </form>
 
     <form action="{{ url_for('set_interface') }}" method="post">
       <select name="interface" onchange="this.form.submit()" {{ 'disabled' if status.running else '' }}>
@@ -572,10 +567,12 @@
             <table>
               <tr><th>Port</th><th>Service</th><th>Product / version</th></tr>
               {% for p in host.ports %}
-              <tr>
+              <tr class="{{ 'unprobed' if p.probe else '' }}">
                 <td class="port">{{ p.port }}/{{ p.protocol }}</td>
-                <td class="svc">{{ p.service or '&ndash;' | safe }}</td>
-                <td class="ver">{{ [p.product, p.version] | select | join(' ') or '&ndash;' | safe }}</td>
+                <td class="svc">{{ p.service or '&ndash;' | safe }}{% if p.probe %}<span class="q" title="Name from nmap's port list, not confirmed">?</span>{% endif %}</td>
+                <td class="ver">{% if p.probe == 'skipped' %}<span class="probe-note" title="Port is on the never-probe list (ALIANA_NO_PROBE_PORTS)">Not probed &middot; skip list</span>
+                  {% elif p.probe == 'timeout' %}<span class="probe-note" title="Port is open, but identification didn't finish: no answer before the time cap, or it was stopped">Not identified</span>
+                  {% else %}{{ [p.product, p.version] | select | join(' ') or '&ndash;' | safe }}{% endif %}</td>
               </tr>
               {% endfor %}
               {% for p in host.earlier %}

@@ -54,8 +54,10 @@ PROFILES = {
         "description": "Top 100 TCP ports with light version detection, normal timing, "
                        "rate-capped. Safe for most office networks.",
         "short": "Top 100 ports, light probing, rate-capped",
-        "args": ["-sV", "--version-light", "-T3", "--top-ports", "100",
-                 "--max-rate", "300", "--host-timeout", "5m"],
+        "args": ["-T3", "--top-ports", "100", "--max-rate", "300", "--host-timeout", "5m"],
+        # Stage 2 (service identification on the ports found open)
+        "version_args": ["--version-light"],
+        "version_host_timeout": "2m",
         "timeout": 1200,
     },
     "deep": {
@@ -64,8 +66,9 @@ PROFILES = {
                        "fingerprinting. Much more traffic and probing -- run "
                        "deliberately, not on fragile/OT networks.",
         "short": "Top 1000 ports, full probing + OS guess",
-        "args": ["-sV", "-T3", "--top-ports", "1000",
-                 "--max-rate", "300", "--host-timeout", "15m"],
+        "args": ["-T3", "--top-ports", "1000", "--max-rate", "300", "--host-timeout", "15m"],
+        "version_args": [],
+        "version_host_timeout": "5m",
         # Only used when nmap has raw sockets (OS detection needs them).
         # --osscan-limit skips hosts without both an open and a closed port
         # (the guess would be poor anyway); one try keeps the traffic down.
@@ -74,6 +77,44 @@ PROFILES = {
     },
 }
 DEFAULT_PROFILE = "standard"
+
+# Scans run in two stages (see run_scan): stage 1 finds open ports (+ OS
+# guess on Deep) and those results are kept no matter what; stage 2 then
+# identifies the services on those ports, with a time cap per host. Some
+# devices accept a connection and then never answer (e.g. door-access
+# controllers on 9999), which makes nmap wait out every probe -- minutes
+# per port -- and can lock up small embedded TCP stacks. Ports listed here
+# are reported as open but never get identification probes.
+# Edited on the Settings page (saved in the DB); ALIANA_NO_PROBE_PORTS sets
+# the default for a fresh install: comma-separated ports/ranges, e.g. "9999,10001-10003".
+NO_PROBE_PORTS_DEFAULT = os.environ.get("ALIANA_NO_PROBE_PORTS", "9999")
+
+
+def _parse_port_list(spec):
+    out = set()
+    for part in (spec or "").replace(" ", "").split(","):
+        if not part:
+            continue
+        a, _, b = part.partition("-")
+        try:
+            lo, hi = int(a), int(b or a)
+        except ValueError:
+            continue
+        out.update(range(max(1, lo), min(65535, hi) + 1))
+    return out
+
+
+def _format_port_list(ports):
+    """{9999, 10001, 10002, 10003} -> ["9999", "10001-10003"]"""
+    out, ports = [], sorted(ports)
+    i = 0
+    while i < len(ports):
+        j = i
+        while j + 1 < len(ports) and ports[j + 1] == ports[j] + 1:
+            j += 1
+        out.append(str(ports[i]) if i == j else f"{ports[i]}-{ports[j]}")
+        i = j + 1
+    return out
 
 _scan_lock = threading.Lock()
 _stop_requested = threading.Event()
@@ -127,6 +168,7 @@ def _reset_progress(subnet):
         "hosts_up": 0,
         "open_ports": 0,
         "recent": [],  # newest first: {"ip", "port", "proto"}
+        "stage": 1,    # 1 = finding ports, 2 = identifying services
     })
 
 
@@ -153,7 +195,7 @@ def _handle_nmap_line(line):
         return
     # "Scanning N hosts" during host discovery means addresses to probe, not
     # hosts found -- only trust it once the port scan has started.
-    discovering = _progress["phase"] in ("Starting", "Discovering hosts")
+    discovering = _progress["phase"] in ("Starting", "Discovering hosts") or _progress.get("stage") == 2
     m = _RE_SCANNING_N.search(line)
     if m:
         if not discovering:
@@ -165,6 +207,8 @@ def _handle_nmap_line(line):
         return
     m = _RE_OPEN.search(line)
     if m:
+        if _progress.get("stage") == 2:
+            return  # stage 2 re-checks ports stage 1 already counted
         _progress["open_ports"] += 1
         _progress["recent"].insert(0, {"port": int(m.group(1)), "proto": m.group(2), "ip": m.group(3)})
         del _progress["recent"][8:]
@@ -315,6 +359,9 @@ def init_db():
     now = datetime.datetime.now().isoformat()
     c.execute("UPDATE jobs SET status = 'cancelled', finished_at = ?, error = 'Aliana restarted' "
               "WHERE status IN ('queued', 'running')", (now,))
+    pcols = [r[1] for r in c.execute("PRAGMA table_info(ports)")]
+    if "probe" not in pcols:  # None, "skipped" (never-probe list) or "timeout"
+        c.execute("ALTER TABLE ports ADD COLUMN probe TEXT")
     # Older databases: OS guess columns (Deep scans with raw sockets)
     hcols = [r[1] for r in c.execute("PRAGMA table_info(hosts)")]
     for col, typ in (("os_name", "TEXT"), ("os_accuracy", "INTEGER"), ("os_type", "TEXT")):
@@ -421,6 +468,22 @@ def set_auto_scan(enabled=None, interval=None):
     _schedule_changed.set()
 
 
+def get_no_probe_ports():
+    """Set of TCP ports that never get service-identification probes."""
+    return _parse_port_list(_get_setting("no_probe_ports", NO_PROBE_PORTS_DEFAULT))
+
+
+def set_no_probe_ports(spec):
+    """Saves the never-probe list from "9999, 10001-10003" (or a list of
+    such strings). Returns the normalised list, e.g. ["9999", "10001-10003"]."""
+    if isinstance(spec, (list, tuple)):
+        spec = ",".join(str(x) for x in spec)
+    ports = _parse_port_list(spec)
+    norm = _format_port_list(ports)
+    _set_setting("no_probe_ports", ",".join(norm))
+    return norm
+
+
 def get_current_interface():
     """Returns the currently selected scan interface: DB setting if present,
     otherwise falls back to the ALIANA_IFACE env var / 'usb0' default."""
@@ -510,6 +573,79 @@ def _nmap_cmd(profile, subnet, xml_path, privileged):
     return cmd + ["-v", "--stats-every", "2s", "-oX", xml_path, subnet]
 
 
+def _version_cmd(profile, targets, ports, xml_path, privileged):
+    """Stage 2: service identification on known-open ports of known-up
+    hosts. -Pn (they're up), -n (names came from stage 1), and a per-host
+    time cap so one silent device can't hold the scan."""
+    p = PROFILES[profile]
+    cmd = ["nmap"]
+    if privileged:
+        cmd.append("--privileged")
+    cmd += ["-sV"] + p.get("version_args", []) + [
+        "-Pn", "-n", "-T3", "--max-rate", "300",
+        "--host-timeout", p.get("version_host_timeout", "3m"),
+        "-p", "T:" + ",".join(str(x) for x in sorted(ports)),
+        "-v", "--stats-every", "2s", "-oX", xml_path] + sorted(targets, key=ipaddress.IPv4Address)
+    return cmd
+
+
+def _identify_services(profile, hosts, privileged, xml_path):
+    """Runs stage 2 and merges what it learns into `hosts` (stage-1 results,
+    modified in place). Every open port ends up with probe = None
+    (identified, or nmap tried and had no match), "skipped" (on the
+    never-probe list), or "timeout" (cap hit, or stopped by the operator).
+    Returns "ok", "timeout" or "stopped"."""
+    targets, ports = set(), set()
+    no_probe = get_no_probe_ports()
+    for h in hosts:
+        for pt in h["ports"]:
+            if pt["state"] != "open" or pt["protocol"] != "tcp":
+                continue
+            if pt["port"] in no_probe:
+                pt["probe"] = "skipped"
+                continue
+            pt["probe"] = "timeout"      # until stage 2 says otherwise
+            targets.add(h["ip"])
+            ports.add(pt["port"])
+    if not targets:
+        return "ok"
+    try:
+        os.remove(xml_path)  # so stage-1 output can't be mistaken for stage 2's
+    except OSError:
+        pass
+    _progress["stage"] = 2
+    _progress["phase"] = "Identifying services"
+    _progress["percent"] = None
+    result = "ok"
+    try:
+        _run_nmap_live(_version_cmd(profile, targets, ports, xml_path, privileged),
+                       timeout=PROFILES[profile]["timeout"])
+    except ScanStopped:
+        result = "stopped"
+    except subprocess.TimeoutExpired:
+        result = "timeout"
+    except RuntimeError:
+        result = "timeout"   # nmap error in stage 2: keep stage-1 results
+    try:
+        found = {h["ip"]: h for h in _parse_nmap_xml(xml_path)}
+    except Exception:
+        found = {}           # stopped/killed before nmap wrote the file
+    for h in hosts:
+        h2 = found.get(h["ip"])
+        if not h2:
+            continue         # host hit its time cap (or stage 2 cut short)
+        by_port = {(p2["protocol"], p2["port"]): p2 for p2 in h2["ports"]}
+        for pt in h["ports"]:
+            p2 = by_port.get((pt["protocol"], pt["port"]))
+            if pt.get("probe") != "timeout" or not p2:
+                continue
+            pt["probe"] = None
+            for k in ("service", "product", "version"):
+                if p2.get(k):
+                    pt[k] = p2[k]
+    return result
+
+
 def run_scan(subnet=None, profile=None, scope="subnet", interface=None):
     """Runs an nmap scan using a scan profile (default: the saved one) and
     stores results. Returns scan_id or None. scope "subnet" scans the subnet
@@ -567,16 +703,33 @@ def run_scan(subnet=None, profile=None, scope="subnet", interface=None):
 
         hosts = _parse_nmap_xml(xml_path)
         checked = _parse_scaninfo(xml_path)
+
+        # Stage 2: identify services on the open ports. Stage-1 results are
+        # kept whatever happens here; stopping now saves what's been found.
+        stage2 = "ok"
+        if profile != "discovery":
+            stage2 = _identify_services(profile, hosts, mode == "syn", xml_path)
         finished = datetime.datetime.now().isoformat()
 
         scan_id = _store_results(subnet, started, finished, hosts, profile, mode, checked, scope)
+        n_slow = sum(1 for h in hosts for pt in h["ports"] if pt.get("probe") == "timeout")
+        note = None
+        if stage2 == "stopped":
+            note = f"Service identification stopped -- open ports were saved; {n_slow} not identified."
+        elif n_slow:
+            note = (f"{n_slow} open port(s) didn't answer identification probes in time -- "
+                    "shown as not identified.")
+        if note:
+            prev = _last_scan_status.get("notice")
+            _last_scan_status["notice"] = f"{prev} {note}" if prev else note
         _last_scan_status["last_job"] = {
             "scope": scope, "target": subnet, "hosts": len(hosts),
             "open_ports": sum(1 for h in hosts for p in h["ports"] if p["state"] == "open")}
 
         _last_scan_status["last_run"] = finished
         _last_scan_status["last_error"] = None
-        _last_scan_status["last_outcome"] = "complete"
+        _last_scan_status["last_outcome"] = "stopped" if stage2 == "stopped" else "complete"
+        _last_scan_status["last_job"]["partial"] = stage2 == "stopped"
         return scan_id
 
     except ScanStopped:
@@ -734,9 +887,10 @@ def _store_results(subnet, started, finished, hosts, profile=None, mode=None, po
         host_id = c.lastrowid
         for p in h["ports"]:
             c.execute(
-                "INSERT INTO ports (host_id, port, protocol, state, service, product, version) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (host_id, p["port"], p["protocol"], p["state"], p["service"], p["product"], p["version"]),
+                "INSERT INTO ports (host_id, port, protocol, state, service, product, version, probe) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (host_id, p["port"], p["protocol"], p["state"], p["service"], p["product"], p["version"],
+                 p.get("probe")),
             )
 
     conn.commit()
