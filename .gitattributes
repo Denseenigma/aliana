@@ -1,2 +1,6 @@
 # Keep LF line endings in the repo so scripts run on the Pi
 * text=auto eol=lf
+*.otf binary
+*.ttf binary
+*.woff2 binary
+*.png binary

@@ -10,6 +10,14 @@
   The full detail lives on the browser dashboard at "/".
 -->
 <style>
+  /* Title face: "Aliana Title" -- condensed Latin cut of Noto Serif CJK JP
+     Black (SIL OFL 1.1), see static/fonts/LICENSE-AlianaTitle.txt */
+  @font-face {
+    font-family: "Aliana Title";
+    src: url("/static/fonts/AlianaTitle.otf") format("opentype");
+    font-weight: 100 900;   /* one heavy face; never synthesize bold */
+    font-display: block;
+  }
   /*
     SCREEN SAFE AREA -- the panel hides a few pixels behind its bezel.
     If anything is still cut off (or there's a gap), adjust these.
@@ -32,7 +40,7 @@
     --orange: #ff7a00;
     --green: #50ff50;
     --red: #ff2626;
-    --title: "Times New Roman", "Liberation Serif", "DejaVu Serif", serif;
+    --title: "Aliana Title", "Times New Roman", "Liberation Serif", serif;
     --cond: "DejaVu Sans Condensed", "Liberation Sans Narrow", "Arial Narrow", sans-serif;
     --mono: "DejaVu Sans Mono", ui-monospace, Consolas, monospace;
   }
@@ -76,8 +84,8 @@
     color: #000;
     font-family: var(--title);
     font-weight: bold;
-    font-size: 17px;
-    letter-spacing: 0.04em;
+    font-size: 21px;
+    letter-spacing: 0.03em;
     clip-path: polygon(0 0, 100% 0, calc(100% - 8px) 100%, 0 100%);
   }
   .brand svg { width: 20px; height: 16px; }
@@ -140,8 +148,8 @@
   .phase {
     font-family: var(--title);
     font-weight: bold;
-    font-size: 17px;
-    letter-spacing: 0.05em;
+    font-size: 21px;
+    letter-spacing: 0.02em;
     color: var(--orange);
     overflow: hidden;
     text-overflow: ellipsis;
@@ -199,15 +207,15 @@
     align-self: flex-start;
   }
   .tile .num {
-    font-size: 32px;
+    font-family: var(--title);
+    font-size: 38px;
     line-height: 38px;
-    font-weight: bold;
     color: var(--text);
     text-align: right;
     padding: 0 8px;
     white-space: nowrap;
   }
-  .tile .num.small { font-size: 22px; }
+  .tile .num.small { font-size: 30px; }
   .tile.live .num { color: var(--green); text-shadow: 0 0 8px rgba(80, 255, 80, 0.5); }
 
   /* Feed */
@@ -257,9 +265,9 @@
     background: var(--orange);
     color: #000;
     font-family: var(--title);
-    font-size: 19px;
+    font-size: 24px;
     font-weight: bold;
-    letter-spacing: 0.08em;
+    letter-spacing: 0.04em;
     touch-action: manipulation;
     clip-path: polygon(0 0, 100% 0, 100% calc(100% - 12px), calc(100% - 12px) 100%, 0 100%);
   }
@@ -300,8 +308,8 @@
     color: #000;
     font-family: var(--title);
     font-weight: bold;
-    font-size: 17px;
-    letter-spacing: 0.05em;
+    font-size: 21px;
+    letter-spacing: 0.03em;
     clip-path: polygon(0 0, 100% 0, calc(100% - 8px) 100%, 0 100%);
   }
   .wifi-head .hazard { flex: 1; width: auto; opacity: 0.5; }
@@ -398,7 +406,7 @@
     clip-path: polygon(0 0, calc(100% - 14px) 0, 100% 14px, 100% 100%, 0 100%);
     text-align: left;
   }
-  .pick .pick-name { font-family: var(--title); font-size: 21px; letter-spacing: 0.08em; }
+  .pick .pick-name { font-family: var(--title); font-size: 30px; line-height: 30px; letter-spacing: 0.03em; }
   .pick .pick-desc { font-family: var(--cond); font-size: 12px; font-weight: normal; letter-spacing: 0.04em; color: var(--text); }
   .pick .pick-default { font-family: var(--cond); font-size: 9px; letter-spacing: 0.12em; color: var(--muted); }
   .pick.discovery { color: var(--cyan); border-left-color: var(--cyan); }
