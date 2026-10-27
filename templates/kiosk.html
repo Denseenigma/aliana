@@ -124,6 +124,21 @@
     font-size: 11px;
   }
   .iface b { color: var(--text); font-weight: normal; margin-right: 6px; }
+  /* Queue ticker: jobs waiting (full queue lives on the web dashboard) */
+  .qtick {
+    display: flex;
+    align-items: center;
+    padding: 0 6px 0 5px;
+    background: var(--orange);
+    color: #000;
+    font-family: var(--title);
+    font-size: 15px;
+    letter-spacing: 0.04em;
+    white-space: nowrap;
+  }
+  .qtick[hidden] { display: none; }
+  .qtick small { font-family: var(--cond); font-size: 9px; letter-spacing: 0.1em; margin-right: 3px; }
+  .qtick.held { background: transparent; color: var(--muted); box-shadow: inset 0 0 0 1px var(--line-dim); }
   #clock {
     display: flex;
     align-items: center;
@@ -273,7 +288,7 @@
   /* Controls */
   .controls {
     display: grid;
-    grid-template-columns: 2fr 1fr 1fr 1fr;
+    grid-template-columns: 2fr 1fr 1fr;
     gap: 5px;
   }
   button {
@@ -432,17 +447,6 @@
   .pick.discovery:active { background: #003840; }
   .pick.deep:active { background: #400000; }
   .picker .wifi-head button { height: 34px; padding: 0 14px; }
-  /* Auto-scan panel: compact one-line rows (reuses the picker frame) */
-  .auto-opts { flex: 1; display: flex; flex-direction: column; gap: 4px; }
-  .pick.row { flex-direction: row; align-items: center; justify-content: space-between; gap: 10px; }
-  .pick.row .pick-name { font-size: 24px; line-height: 24px; }
-  .pick.row .pick-desc { font-size: 14px; line-height: 15px; text-align: right; }
-  .pick.row.on { color: var(--green); border-left-color: var(--green); }
-  .pick.row.on .pick-desc { color: var(--green); }
-  .pick.row.off { color: var(--muted); border-left-color: var(--line-dim); }
-  .pick.row.off.on { color: var(--orange); border-left-color: var(--orange); }
-  .pick.row.off.on .pick-desc { color: var(--orange); }
-  #auto-btn.on { color: var(--green); box-shadow: inset 0 0 0 1px var(--green); }
   #scan-btn.stopping {
     background: #fff;
     color: var(--red);
@@ -667,6 +671,7 @@
   </div>
   <div class="hazard"></div>
   <div class="iface"><span class="dot" id="iface-dot"></span><b id="iface-name">&mdash;</b> <span id="iface-ip"></span></div>
+  <div class="qtick" id="qtick" hidden></div>
   <div id="clock">--:--</div>
 </header>
 
@@ -705,7 +710,6 @@
 <section class="controls">
   <button id="scan-btn" type="button">SCAN NOW</button>
   <button id="iface-btn" class="secondary" type="button">IFACE &#x21bb;</button>
-  <button id="auto-btn" class="secondary" type="button">AUTO &middot; OFF</button>
   <button id="wifi-btn" class="secondary" type="button">WI-FI</button>
 </section>
 
@@ -727,15 +731,6 @@
     <button id="picker-close" class="secondary" type="button">CANCEL</button>
   </div>
   <div id="picks" style="display:contents"></div>
-</section>
-
-<section class="picker" id="auto-panel">
-  <div class="wifi-head">
-    <div class="wifi-title">AUTO-SCAN</div>
-    <div class="hazard"></div>
-    <button id="auto-close" class="secondary" type="button">CANCEL</button>
-  </div>
-  <div id="auto-opts" class="auto-opts"></div>
 </section>
 
 <section class="wifi-panel" id="wifi-panel">
@@ -783,10 +778,6 @@
     return m + ":" + (s < 10 ? "0" : "") + s;
   }
 
-  function shortIv(sec) {   // 300 -> "5M", 3600 -> "1H"
-    return sec % 3600 === 0 ? (sec / 3600) + "H" : Math.round(sec / 60) + "M";
-  }
-
   function ago(sec) {
     if (sec == null) return "–";
     if (sec < 60) return "now";
@@ -802,6 +793,11 @@
     var latest = s.latest;
 
     // Header
+    var q = s.queue || {}, qt = $("qtick");
+    var qText = q.queued ? '<small>QUEUE</small>' + q.queued + (q.paused ? " \u2016" : "") : "";
+    if (qt.innerHTML !== qText) qt.innerHTML = qText;   // only touch the DOM on change (SPI screen)
+    qt.hidden = !q.queued;
+    qt.className = "qtick" + (q.paused ? " held" : "");
     $("iface-name").textContent = s.interface || "—";
     $("iface-ip").textContent = s.interface_ip ? s.interface_ip.split("/")[0] : "no IP";
     $("iface-dot").className = "dot" + (s.interface_ip ? " up" : "");
@@ -861,7 +857,8 @@
     // Feed
     var feed = $("feed-list"), html = "";
     if (s.running && p) {
-      html = '<div class="feed-title">Live — ' + esc(s.profile_label) + " — " + esc(p.subnet) + "</div>";
+      var runLabel = (s.profiles.filter(function (x) { return x.key === p.profile; })[0] || {}).label || s.profile_label;
+      html = '<div class="feed-title">Live — ' + esc(runLabel) + " — " + esc(p.subnet) + "</div>";
       if (!p.recent.length) {
         html += '<div class="muted">' + (p.profile === "discovery"
           ? "Host sweep only \u2014 Discovery doesn't scan ports."
@@ -909,9 +906,6 @@
     }
     btn.disabled = stopping;
     $("iface-btn").disabled = s.running || s.interfaces.length < 2;
-    var ab = $("auto-btn"), al = s.auto_scan ? "AUTO \u00b7 " + shortIv(s.scan_interval) : "AUTO \u00b7 OFF";
-    if (ab.textContent !== al) ab.textContent = al;
-    ab.className = "secondary" + (s.auto_scan ? " on" : "");
     // Profile tag: the running scan's profile, or (idle) the one next up
     var prof = (s.running && p && p.profile) || s.profile;
     var label = prof === s.profile ? s.profile_label :
@@ -1028,39 +1022,6 @@
   });
   $("picker-close").addEventListener("click", closePicker);
 
-  // ---- Auto-scan panel ----
-  function openAuto() {
-    if (!state) return;
-    var rows = [{ v: "off", name: "OFF", desc: "ONLY WHEN YOU TAP SCAN NOW", on: !state.auto_scan, cls: "off" }];
-    state.intervals.forEach(function (iv) {
-      rows.push({ v: iv.seconds, name: "EVERY " + iv.label.toUpperCase(),
-                  desc: (state.auto_scan && iv.seconds === state.scan_interval ? "ACTIVE \u00b7 " : "") +
-                        String(state.profile_label).toUpperCase() + " PROFILE",
-                  on: state.auto_scan && iv.seconds === state.scan_interval, cls: "" });
-    });
-    $("auto-opts").innerHTML = rows.map(function (r) {
-      return '<button type="button" class="pick row ' + r.cls + (r.on ? " on" : "") + '" data-v="' + r.v + '">' +
-        '<span class="pick-name">' + esc(r.name) + '</span><span class="pick-desc">' + esc(r.desc) + "</span></button>";
-    }).join("");
-    $("auto-panel").className = "picker show";
-  }
-  function closeAuto() { $("auto-panel").className = "picker"; }
-  $("auto-btn").addEventListener("click", openAuto);
-  $("auto-close").addEventListener("click", closeAuto);
-  $("auto-opts").addEventListener("click", function (e) {
-    var b = e.target.closest(".pick");
-    if (!b) return;
-    closeAuto();
-    fetch("/api/autoscan", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ interval: b.getAttribute("data-v") })
-    })
-      .then(function (r) { return r.json(); })
-      .then(apply)
-      .catch(function () {})
-      .then(poll);
-  });
   // ---- Wi-Fi panel ----
   var wifiTimer = null, lastQrUrl = null;
 
@@ -1314,7 +1275,10 @@
     if (data.outcome_seq === lastSeq) return;
     lastSeq = data.outcome_seq;
     var o = data.outcome || "complete", st = $("stamp"), sub = "";
-    if (o === "complete" && data.latest) {
+    var lj = data.last_job || {};
+    if (o === "complete" && lj.scope === "host") {
+      sub = "HOST " + lj.target + " · " + (lj.hosts ? lj.open_ports + " OPEN PORTS" : "NO RESPONSE");
+    } else if (o === "complete" && data.latest) {
       sub = data.latest.hosts + " HOSTS · " + data.latest.open_ports + " OPEN PORTS";
     } else if (o === "stopped") {
       sub = "SCAN STOPPED BY OPERATOR";

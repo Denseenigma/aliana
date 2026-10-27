@@ -64,7 +64,7 @@ def _dashboard(scan_id):
     scan = scanner.get_scan(scan_id)
     if scan_id is not None and scan is None:
         return redirect(url_for("index"))
-    latest_id = (scanner.get_scan_history(limit=1) or [{}])[0].get("id")
+    latest_id = scanner.latest_subnet_scan_id()
     viewing_old = scan is not None and scan["id"] != latest_id
     status = scanner.get_status()
     history = scanner.get_scan_history(limit=10)
@@ -81,7 +81,8 @@ def _dashboard(scan_id):
 @app.route("/scan/now", methods=["POST"])
 def scan_now():
     # Run in a background thread so the request returns immediately
-    threading.Thread(target=scanner.run_scan, daemon=True).start()
+    scanner.enqueue("subnet", source="manual")
+    time.sleep(0.3)  # let the worker pick it up so the page shows it running
     return redirect(url_for("index"))
 
 
@@ -171,6 +172,8 @@ def _kiosk_state():
         "running": status["running"],
         "outcome": status.get("last_outcome"),
         "outcome_seq": status.get("outcome_seq", 0),
+        "last_job": status.get("last_job"),
+        "queue": {k: status["queue"][k] for k in ("queued", "paused", "current")},
         "hostname": socket.gethostname(),
         "nmap_version": _get_nmap_version(),
         "profile": status["profile"],
@@ -206,9 +209,72 @@ def api_scan():
     if not scanner.get_status()["running"]:
         if profile in scanner.PROFILES:
             scanner.set_profile(profile)
-        threading.Thread(target=scanner.run_scan, daemon=True).start()
-        time.sleep(0.2)  # let the scan flag flip so the response reflects it
+        scanner.enqueue("subnet", source="manual")
+        time.sleep(0.3)  # let the worker start it so the response reflects it
     return jsonify(_kiosk_state())
+
+
+# ---------------------------------------------------------------- job queue
+
+@app.route("/queue")
+def queue_page():
+    status = scanner.get_status()
+    return render_template("queue.html", status=status, profiles=scanner.PROFILES)
+
+
+@app.route("/api/queue")
+def api_queue():
+    return jsonify(scanner.get_queue())
+
+
+@app.route("/api/queue/host", methods=["POST"])
+def api_queue_host():
+    """JSON {"ip": "..."}: queue a Deep scan of that one host."""
+    data = request.get_json(silent=True) or {}
+    job, err = scanner.enqueue("host", target=data.get("ip"), profile=data.get("profile"),
+                               source="host-card")
+    if err:
+        return jsonify({"ok": False, "error": err, "queue": scanner.queue_summary()}), 409
+    return jsonify({"ok": True, "job": job, "queue": scanner.queue_summary()})
+
+
+@app.route("/api/queue/subnet", methods=["POST"])
+def api_queue_subnet():
+    """JSON {"profile": ...}: queue a network scan (default: saved profile)."""
+    data = request.get_json(silent=True) or {}
+    job, err = scanner.enqueue("subnet", profile=data.get("profile"), source="manual")
+    if err:
+        return jsonify({"ok": False, "error": err}), 409
+    return jsonify({"ok": True, "job": job})
+
+
+@app.route("/api/queue/<int:job_id>/cancel", methods=["POST"])
+def api_queue_cancel(job_id):
+    return jsonify({"ok": scanner.cancel_job(job_id)})
+
+
+@app.route("/api/queue/<int:job_id>/front", methods=["POST"])
+def api_queue_front(job_id):
+    scanner.move_job_to_front(job_id)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/queue/pause", methods=["POST"])
+def api_queue_pause():
+    scanner.set_queue_paused(bool((request.get_json(silent=True) or {}).get("paused")))
+    return jsonify({"ok": True, "paused": scanner.get_queue_paused()})
+
+
+@app.route("/api/queue/cancel-all", methods=["POST"])
+def api_queue_cancel_all():
+    scanner.cancel_all_queued()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/queue/clear", methods=["POST"])
+def api_queue_clear():
+    scanner.clear_finished_jobs()
+    return jsonify({"ok": True})
 
 
 @app.route("/api/profile/next", methods=["POST"])
@@ -353,7 +419,8 @@ def api_history():
 
 if __name__ == "__main__":
     scanner.init_db()
-    # Kick off the periodic background scanner
-    t = threading.Thread(target=scanner.background_loop, daemon=True)
-    t.start()
+    # The queue worker runs every scan, one at a time; the auto-scan loop
+    # adds a network scan to the queue whenever one is due
+    threading.Thread(target=scanner.queue_worker, daemon=True).start()
+    threading.Thread(target=scanner.background_loop, daemon=True).start()
     app.run(host="0.0.0.0", port=PORT)

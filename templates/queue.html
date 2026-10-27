@@ -1,0 +1,482 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Aliana Queue</title>
+<style>
+  /* Fonts: "Aliana Title" / "Aliana Sans", SIL OFL 1.1 -- see static/fonts/LICENSE-*.txt */
+  @font-face {
+    font-family: "Aliana Title";
+    src: url("/static/fonts/AlianaTitle.otf") format("opentype");
+    font-weight: 100 900;
+    font-display: block;
+  }
+  @font-face {
+    font-family: "Aliana Sans";
+    src: url("/static/fonts/AlianaSans.otf") format("opentype");
+    font-weight: 100 900;
+    font-display: block;
+  }
+
+  /* Theme: NERV-terminal inspired -- matches index.html / kiosk.html */
+  :root {
+    --bg: #000;
+    --panel: #0b0603;
+    --border: #6b3200;
+    --text: #ffd9b0;
+    --muted: #b06a2c;
+    --accent: #ff7a00;
+    --green: #50ff50;
+    --cyan: #00e5ff;
+    --red: #ff2626;
+    --title: "Aliana Title", "Times New Roman", serif;
+    --sans: "Aliana Sans", "DejaVu Sans Condensed", "Arial Narrow", sans-serif;
+    --mono: ui-monospace, "SF Mono", "Cascadia Code", Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 24px;
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 0.03em;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='28' height='48' viewBox='0 0 28 48'%3E%3Cpath d='M14 0 L28 8 L28 24 L14 32 L0 24 L0 8 Z M14 32 L14 48' fill='none' stroke='%23ff7a00' stroke-opacity='0.06'/%3E%3C/svg%3E");
+  }
+  .wrap { max-width: 1280px; margin: 0 auto; }
+  .muted { color: var(--muted); }
+
+  /* ---------- Header ---------- */
+  header {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 12px 16px;
+    position: relative;
+    padding-bottom: 22px;
+    margin-bottom: 22px;
+  }
+  header::after {
+    content: "";
+    position: absolute;
+    left: 0; right: 0; bottom: 0;
+    height: 8px;
+    background: repeating-linear-gradient(-45deg, var(--accent) 0 8px, #000 8px 16px);
+    opacity: 0.8;
+  }
+  h1 {
+    margin: 0;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    background: var(--accent);
+    color: #000;
+    font-family: var(--title);
+    font-weight: normal;
+    font-size: 2.4rem;
+    line-height: 1;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+    padding: 4px 30px 2px 12px;
+    clip-path: polygon(0 0, 100% 0, calc(100% - 16px) 100%, 0 100%);
+    text-shadow: 0 0 8px rgba(255, 122, 0, 0.35);
+  }
+  h1 svg { width: 30px; height: 26px; flex-shrink: 0; }
+  h1 small { font-family: var(--sans); font-size: 0.85rem; letter-spacing: 0.2em; opacity: 0.75; }
+  .nav { display: flex; gap: 4px; margin-left: auto; }
+  .nav a {
+    color: var(--accent);
+    text-decoration: none;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    font-size: 0.95rem;
+    padding: 7px 14px;
+    border: 1px solid var(--border);
+  }
+  .nav a.on { background: var(--accent); color: #000; border-color: var(--accent); }
+
+  .controls { flex-basis: 100%; display: flex; align-items: center; flex-wrap: wrap; gap: 10px 14px; }
+  .state {
+    display: flex; align-items: center; gap: 8px;
+    font-family: var(--title); font-size: 1.6rem; line-height: 1;
+    color: var(--accent); text-transform: uppercase; min-width: 130px;
+  }
+  .state.running { color: var(--red); }
+  .state.paused { color: var(--muted); }
+  .dot { width: 9px; height: 9px; background: var(--green); box-shadow: 0 0 6px var(--green); }
+  .state.running .dot { background: var(--red); box-shadow: 0 0 6px var(--red); animation: blink 0.8s steps(1) infinite; }
+  .state.paused .dot { background: var(--muted); box-shadow: none; }
+  @keyframes blink { 50% { opacity: 0; } }
+  .kv { font-size: 0.85rem; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); }
+  .kv b { color: var(--text); font-weight: inherit; margin-left: 4px; }
+  .spacer { flex: 1; }
+
+  input, select {
+    background: #000;
+    color: var(--accent);
+    border: 1px solid var(--accent);
+    padding: 8px 10px;
+    font-family: var(--sans);
+    font-size: 0.95rem;
+    letter-spacing: 0.05em;
+  }
+  input { width: 150px; font-family: var(--mono); letter-spacing: 0; }
+  input::placeholder { color: var(--border); }
+  button {
+    background: var(--accent);
+    color: #000;
+    border: none;
+    font-family: var(--title);
+    font-size: 1.15rem;
+    line-height: 1;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    padding: 8px 22px 6px 14px;
+    cursor: pointer;
+    clip-path: polygon(0 0, 100% 0, 100% calc(100% - 9px), calc(100% - 9px) 100%, 0 100%);
+  }
+  button:hover { background: #ffa040; }
+  button.ghost { background: transparent; color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+  button.ghost:hover { background: var(--accent); color: #000; }
+  button.red { background: transparent; color: var(--red); box-shadow: inset 0 0 0 1px var(--red); }
+  button.red:hover { background: var(--red); color: #000; }
+  button.stop { background: var(--red); }
+  button.stopping { background: #fff; color: var(--red); animation: stopflash 0.5s steps(1) infinite; }
+  @keyframes stopflash { 50% { opacity: 0.55; } }
+  button.sm { font-family: var(--sans); font-size: 0.75rem; letter-spacing: 0.12em; padding: 5px 12px 4px 10px; }
+  button:disabled { opacity: 0.4; cursor: default; }
+
+  .msg { display: none; border: 1px solid var(--red); border-left: 6px solid var(--red); background: #1a0000;
+         color: var(--red); padding: 10px 14px; margin-bottom: 20px; letter-spacing: 0.06em; }
+  .msg.show { display: block; }
+  .msg.ok { border-color: var(--green); color: var(--green); background: #001a00; }
+
+  /* ---------- Panels ---------- */
+  .grid { display: grid; grid-template-columns: minmax(0, 1fr) 420px; gap: 22px; align-items: start; }
+  @media (max-width: 1000px) { .grid { grid-template-columns: 1fr; } }
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--accent);
+    padding: 16px 18px 18px;
+    margin-bottom: 22px;
+    clip-path: polygon(0 0, calc(100% - 16px) 0, 100% 16px, 100% 100%, 0 100%);
+  }
+  .panel.live { border-left-color: var(--red); }
+  .panel-head { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; margin-bottom: 14px; }
+  .panel-head .kv { margin-left: auto; }
+  h2 {
+    margin: 0; background: var(--accent); color: #000; font-family: var(--sans); font-weight: inherit;
+    font-size: 0.95rem; letter-spacing: 0.14em; text-transform: uppercase; padding: 3px 12px 2px;
+  }
+  .panel.live h2 { background: var(--red); }
+  .empty { color: var(--muted); letter-spacing: 0.06em; padding: 4px 0; }
+
+  .tag {
+    display: inline-block; font-size: 0.72rem; letter-spacing: 0.12em; text-transform: uppercase;
+    padding: 2px 7px 1px; background: var(--accent); color: #000; vertical-align: middle; white-space: nowrap;
+  }
+  .tag.discovery { background: var(--cyan); }
+  .tag.deep { background: var(--red); }
+  .tag.outline { background: transparent; color: var(--muted); box-shadow: inset 0 0 0 1px var(--border); }
+  .tag.done { background: transparent; color: var(--green); box-shadow: inset 0 0 0 1px var(--green); }
+  .tag.failed { background: transparent; color: var(--red); box-shadow: inset 0 0 0 1px var(--red); }
+  .tag.stopped { background: transparent; color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+  .tag.cancelled { background: transparent; color: var(--muted); box-shadow: inset 0 0 0 1px var(--border); }
+
+  /* Running job */
+  .run-top { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px 14px; }
+  .run-target { font-family: var(--title); font-size: 2.2rem; line-height: 1; color: var(--accent); }
+  .run-phase { font-family: var(--title); font-size: 1.3rem; color: var(--red); text-transform: uppercase; margin-top: 10px; }
+  .bar { height: 10px; border: 1px solid var(--border); margin: 8px 0 12px; position: relative; overflow: hidden; }
+  .bar i { position: absolute; left: 0; top: 0; bottom: 0; background: var(--red); }
+  .bar.ind i { width: 30% !important; animation: slide 1.4s linear infinite; }
+  @keyframes slide { from { left: -30%; } to { left: 100%; } }
+  .stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-bottom: 12px; }
+  .stat { border: 1px solid var(--accent); background: #000; }
+  .stat .label { display: inline-block; background: var(--accent); color: #000; font-size: 0.72rem;
+                 letter-spacing: 0.12em; text-transform: uppercase; padding: 2px 8px 1px; }
+  .stat .num { font-family: var(--title); font-size: 2rem; line-height: 1.1; text-align: right; padding: 2px 12px 4px; }
+  .found { font-family: var(--mono); font-size: 0.85rem; color: var(--green); }
+  .found span { color: var(--muted); }
+
+  /* Job rows */
+  .jobs { display: flex; flex-direction: column; }
+  .job {
+    display: grid;
+    grid-template-columns: 34px minmax(0, 1fr) auto;
+    gap: 2px 12px;
+    align-items: center;
+    padding: 10px 0;
+    border-bottom: 1px solid rgba(107, 50, 0, 0.6);
+  }
+  .job:last-child { border-bottom: none; }
+  .job .pos { font-family: var(--title); font-size: 1.6rem; line-height: 1; color: var(--accent); text-align: center; }
+  .job .what { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; }
+  .job .t { font-family: var(--title); font-size: 1.3rem; line-height: 1; color: var(--text); }
+  .job .sub { grid-column: 2; color: var(--muted); font-size: 0.8rem; letter-spacing: 0.06em; }
+  .job .sub a { color: var(--accent); }
+  .job .sub .err { color: var(--red); }
+  .job .act { display: flex; gap: 6px; grid-row: 1 / span 2; grid-column: 3; }
+  .recent .job { grid-template-columns: minmax(0, 1fr) auto; }
+  .recent .job .sub { grid-column: 1; }
+  .recent .job .act { grid-column: 2; }
+  .add { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .hint { color: var(--muted); font-size: 0.8rem; letter-spacing: 0.04em; margin-top: 10px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>
+    <svg viewBox="0 0 120 100" xmlns="http://www.w3.org/2000/svg" fill="currentColor" aria-hidden="true">
+      <path d="M30 70 L10 85 L35 78 Z"/>
+      <ellipse cx="55" cy="60" rx="22" ry="14" transform="rotate(-10 55 60)"/>
+      <path d="M50 50 C40 20, 70 15, 85 35 C70 30, 55 35, 50 50 Z"/>
+      <circle cx="82" cy="45" r="11"/>
+      <path d="M92 45 L104 42 L92 50 Z"/>
+      <path d="M60 72 L58 88 M68 73 L70 89" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"/>
+    </svg>
+    Aliana <small>scan queue</small>
+  </h1>
+  <nav class="nav"><a href="/">Dashboard</a><a href="/queue" class="on">Queue</a><a href="/wifi">Wi-Fi</a></nav>
+
+  <div class="controls">
+    <div class="state" id="state"><span class="dot"></span><span id="state-t">&hellip;</span></div>
+    <span class="kv">Waiting <b id="kv-waiting">&ndash;</b></span>
+    <span class="kv">Runs <b>one scan at a time</b></span>
+    <span class="spacer"></span>
+    <button type="button" class="ghost" id="pause-btn">Pause queue</button>
+    <button type="button" class="red" id="cancel-all-btn">Cancel all waiting</button>
+  </div>
+</header>
+
+<div class="msg" id="msg"></div>
+
+<div class="grid">
+  <div>
+    <section class="panel" id="run-panel">
+      <div class="panel-head"><h2>Now running</h2><span class="kv" id="run-kv"></span></div>
+      <div id="run"><div class="empty">Loading&hellip;</div></div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head"><h2>Waiting</h2><span class="kv" id="wait-kv"></span></div>
+      <div class="jobs" id="queued"></div>
+    </section>
+  </div>
+
+  <div>
+    <section class="panel">
+      <div class="panel-head"><h2>Add a job</h2></div>
+      <div class="add">
+        <input id="add-ip" placeholder="192.168.1.20" autocomplete="off" spellcheck="false">
+        <button type="button" id="add-host">Deep scan host</button>
+      </div>
+      <div class="add" style="margin-top:10px">
+        <select id="add-profile">
+          {% for key, p in profiles.items() %}
+          <option value="{{ key }}" {{ 'selected' if key == status.profile else '' }}>Network &middot; {{ p.label }}</option>
+          {% endfor %}
+        </select>
+        <button type="button" class="ghost" id="add-net">Queue network scan</button>
+      </div>
+      <div class="hint">Host Deep scans can also be queued from each host card on the dashboard. Up to <span id="max-q">20</span> jobs can wait; automatic scans join the same queue.</div>
+    </section>
+
+    <section class="panel recent">
+      <div class="panel-head"><h2>Recent jobs</h2><span class="kv"><button type="button" class="ghost sm" id="clear-btn">Clear</button></span></div>
+      <div class="jobs" id="recent"></div>
+    </section>
+  </div>
+</div>
+
+</div>
+
+<script>
+(function () {
+  var $ = function (id) { return document.getElementById(id); };
+  var PROFILES = {{ profiles | tojson }};
+  var data = null, timer = null, stopArmed = null;
+
+  function esc(s) {
+    return String(s == null ? "" : s).replace(/[&<>"]/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c];
+    });
+  }
+  function label(p) { return PROFILES[p] ? PROFILES[p].label : (p || "?"); }
+  function ptag(p) { return '<span class="tag ' + esc(p) + '">' + esc(label(p)) + "</span>"; }
+  function when(iso) {
+    if (!iso) return "–";
+    var d = new Date(iso), now = new Date();
+    var hm = ("0" + d.getHours()).slice(-2) + ":" + ("0" + d.getMinutes()).slice(-2);
+    return d.toDateString() === now.toDateString() ? hm
+      : d.toLocaleString("en-US", { month: "short" }) + " " + d.getDate() + " · " + hm;
+  }
+  function ago(iso) {
+    if (!iso) return "";
+    var s = (Date.now() - new Date(iso).getTime()) / 1000;
+    if (s < 60) return "just now";
+    if (s < 3600) return Math.floor(s / 60) + " min ago";
+    if (s < 86400) return Math.floor(s / 3600) + " h ago";
+    return Math.floor(s / 86400) + " d ago";
+  }
+  function dur(sec) {
+    if (sec == null || isNaN(sec)) return "–";
+    sec = Math.max(0, Math.round(sec));
+    var m = Math.floor(sec / 60), s = sec % 60;
+    return m >= 60 ? Math.floor(m / 60) + "h " + (m % 60) + "m" : m + ":" + ("0" + s).slice(-2);
+  }
+  function target(j) {
+    if (j.kind === "host") return j.target;
+    return "Network" + (j.target ? " " + j.target : j.interface ? " · " + j.interface : "");
+  }
+  function source(j) {
+    return { "auto": "automatic", "host-card": "from host card", "manual": "manual" }[j.source] || j.source || "";
+  }
+  function flash(text, ok) {
+    var m = $("msg");
+    m.textContent = text;
+    m.className = "msg show" + (ok ? " ok" : "");
+    clearTimeout(m._t);
+    m._t = setTimeout(function () { m.className = "msg"; }, 4000);
+  }
+  function post(url, body) {
+    return fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body || {})
+    }).then(function (r) { return r.json(); }).then(function (d) { load(); return d; });
+  }
+
+  function render() {
+    var d = data, r = d.running;
+    // header
+    var st = $("state");
+    st.className = "state" + (r ? " running" : d.paused ? " paused" : "");
+    $("state-t").textContent = r ? "Running" : d.paused ? "Paused" : "Idle";
+    $("kv-waiting").textContent = d.queued.length + " / " + d.max_queued;
+    $("max-q").textContent = d.max_queued;
+    $("pause-btn").textContent = d.paused ? "Resume queue" : "Pause queue";
+    $("cancel-all-btn").disabled = !d.queued.length;
+
+    // running job
+    $("run-panel").className = "panel" + (r ? " live" : "");
+    if (!r) {
+      $("run-kv").textContent = "";
+      $("run").innerHTML = '<div class="empty">' + (d.paused && d.queued.length
+        ? "Queue paused — resume to start the next job."
+        : "Nothing running.") + "</div>";
+      stopArmed = null;
+    } else {
+      var p = r.progress || {};
+      $("run-kv").innerHTML = "Job <b>#" + r.id + "</b>";
+      var pct = p.percent != null ? Math.round(p.percent) : null;
+      var found = (p.recent || []).map(function (f) {
+        return "<div>" + esc(f.port) + "/" + esc(f.proto) + " <span>on " + esc(f.ip) + "</span></div>";
+      }).join("");
+      $("run").innerHTML =
+        '<div class="run-top"><span class="run-target">' + esc(target(r)) + "</span>" + ptag(r.profile) +
+        '<span class="tag outline">' + esc(source(r)) + "</span>" +
+        '<span class="kv">Started <b>' + when(r.started_at) + "</b></span></div>" +
+        '<div class="run-phase">' + esc(p.phase || "Starting") + (pct != null ? " · " + pct + "%" : "") + "</div>" +
+        '<div class="bar' + (pct == null ? " ind" : "") + '"><i style="width:' + (pct || 0) + '%"></i></div>' +
+        '<div class="stats">' +
+          '<div class="stat"><span class="label">Hosts up</span><div class="num">' + (p.hosts_up != null ? p.hosts_up : "–") + "</div></div>" +
+          '<div class="stat"><span class="label">Open ports</span><div class="num">' + (p.profile === "discovery" ? "–" : (p.open_ports != null ? p.open_ports : "–")) + "</div></div>" +
+          '<div class="stat"><span class="label">Elapsed</span><div class="num">' + dur(p.elapsed) + "</div></div>" +
+        "</div>" +
+        (found ? '<div class="found">' + found + "</div>" : "") +
+        '<div style="margin-top:12px"><button type="button" class="' + (stopArmed === r.id ? "stopping" : "stop") +
+        '" id="stop-btn">' + (stopArmed === r.id ? "Click again to stop" : "Stop this job") + "</button></div>";
+    }
+
+    // waiting
+    $("wait-kv").innerHTML = d.paused ? "<b>Paused</b>" : "";
+    $("queued").innerHTML = d.queued.length ? d.queued.map(function (j) {
+      return '<div class="job"><span class="pos">' + j.position + "</span>" +
+        '<div class="what"><span class="t">' + esc(target(j)) + "</span>" + ptag(j.profile) + "</div>" +
+        '<div class="act">' +
+          (j.position > 1 ? '<button type="button" class="ghost sm" data-front="' + j.id + '">Run next</button>' : "") +
+          '<button type="button" class="red sm" data-cancel="' + j.id + '">Cancel</button></div>' +
+        '<div class="sub">' + esc(source(j)) + " · queued " + ago(j.created_at) + "</div></div>";
+    }).join("") : '<div class="empty">No jobs waiting.</div>';
+
+    // recent
+    $("recent").innerHTML = d.recent.length ? d.recent.map(function (j) {
+      var took = j.started_at && j.finished_at
+        ? (new Date(j.finished_at) - new Date(j.started_at)) / 1000 : null;
+      var result = "";
+      if (j.status === "done" && j.scan_id) {
+        result = '<a href="/scan/' + j.scan_id + '">' + (j.hosts != null ? j.hosts + (j.hosts === 1 ? " host" : " hosts") : "results") +
+          (j.profile !== "discovery" && j.open_ports != null ? " · " + j.open_ports + " open" : "") + "</a>";
+      } else if (j.error) {
+        result = '<span class="err">' + esc(j.error) + "</span>";
+      }
+      return '<div class="job"><div class="what"><span class="t">' + esc(target(j)) + "</span>" + ptag(j.profile) +
+        '<span class="tag ' + esc(j.status) + '">' + esc(j.status) + "</span></div>" +
+        '<div class="act"></div>' +
+        '<div class="sub">' + when(j.finished_at) + (took != null && j.started_at ? " · took " + dur(took) : "") +
+        " · " + esc(source(j)) + (result ? " · " + result : "") + "</div></div>";
+    }).join("") : '<div class="empty">No finished jobs yet.</div>';
+    $("clear-btn").disabled = !d.recent.length;
+  }
+
+  function load() {
+    clearTimeout(timer);
+    return fetch("/api/queue", { cache: "no-store" })
+      .then(function (r) { return r.json(); })
+      .then(function (d) { data = d; render(); })
+      .catch(function () {})
+      .then(function () { timer = setTimeout(load, data && data.running ? 1500 : 3000); });
+  }
+
+  document.addEventListener("click", function (e) {
+    var b = e.target.closest("button");
+    if (!b || !data) return;
+    if (b.id === "stop-btn" && data.running) {
+      var id = data.running.id;
+      if (stopArmed === id) {
+        stopArmed = null;
+        b.disabled = true;
+        b.textContent = "Stopping…";
+        post("/api/queue/" + id + "/cancel");
+      } else {
+        stopArmed = id;               // second click within 4 s stops it
+        render();
+        setTimeout(function () { if (stopArmed === id) { stopArmed = null; render(); } }, 4000);
+      }
+    } else if (b.hasAttribute("data-cancel")) {
+      post("/api/queue/" + b.getAttribute("data-cancel") + "/cancel");
+    } else if (b.hasAttribute("data-front")) {
+      post("/api/queue/" + b.getAttribute("data-front") + "/front");
+    } else if (b.id === "pause-btn") {
+      post("/api/queue/pause", { paused: !data.paused });
+    } else if (b.id === "cancel-all-btn") {
+      post("/api/queue/cancel-all");
+    } else if (b.id === "clear-btn") {
+      post("/api/queue/clear");
+    } else if (b.id === "add-host") {
+      var ip = $("add-ip").value.trim();
+      if (!ip) { $("add-ip").focus(); return; }
+      post("/api/queue/host", { ip: ip }).then(function (d) {
+        if (d.ok) { $("add-ip").value = ""; flash("Queued a Deep scan of " + d.job.target + ".", true); }
+        else flash(d.error || "Couldn't queue that.");
+      });
+    } else if (b.id === "add-net") {
+      post("/api/queue/subnet", { profile: $("add-profile").value }).then(function (d) {
+        if (d.ok) flash("Queued a " + label(d.job.profile) + " network scan.", true);
+        else flash(d.error || "Couldn't queue that.");
+      });
+    }
+  });
+  $("add-ip").addEventListener("keydown", function (e) { if (e.key === "Enter") $("add-host").click(); });
+
+  load();
+})();
+</script>
+</body>
+</html>

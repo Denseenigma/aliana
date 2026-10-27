@@ -286,6 +286,35 @@ def init_db():
         c.execute("ALTER TABLE scans ADD COLUMN mode TEXT")
     if "ports_checked" not in cols:  # e.g. "tcp:1,3,7-9,21" (from nmap's scaninfo)
         c.execute("ALTER TABLE scans ADD COLUMN ports_checked TEXT")
+    if "scope" not in cols:  # "subnet" (whole network) or "host" (one target)
+        c.execute("ALTER TABLE scans ADD COLUMN scope TEXT DEFAULT 'subnet'")
+    # Scan job queue (see enqueue / queue_worker)
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS jobs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            kind TEXT,            -- "subnet" or "host"
+            target TEXT,          -- host IP (host jobs); subnet jobs: filled in when it runs
+            interface TEXT,       -- subnet jobs: interface to scan
+            profile TEXT,
+            source TEXT,          -- "manual", "auto", "host-card"
+            status TEXT,          -- queued / running / done / stopped / failed / cancelled
+            created_at TEXT,
+            started_at TEXT,
+            finished_at TEXT,
+            scan_id INTEGER,
+            hosts INTEGER,
+            open_ports INTEGER,
+            error TEXT
+        )
+    """)
+    jcols = [r[1] for r in c.execute("PRAGMA table_info(jobs)")]
+    if "priority" not in jcols:  # set by "run next"; otherwise jobs run in id order
+        c.execute("ALTER TABLE jobs ADD COLUMN priority INTEGER")
+    # Jobs left over from before a restart never run by themselves (nobody
+    # may be watching) -- mark them so they show up in the queue history.
+    now = datetime.datetime.now().isoformat()
+    c.execute("UPDATE jobs SET status = 'cancelled', finished_at = ?, error = 'Aliana restarted' "
+              "WHERE status IN ('queued', 'running')", (now,))
     # Older databases: OS guess columns (Deep scans with raw sockets)
     hcols = [r[1] for r in c.execute("PRAGMA table_info(hosts)")]
     for col, typ in (("os_name", "TEXT"), ("os_accuracy", "INTEGER"), ("os_type", "TEXT")):
@@ -481,9 +510,12 @@ def _nmap_cmd(profile, subnet, xml_path, privileged):
     return cmd + ["-v", "--stats-every", "2s", "-oX", xml_path, subnet]
 
 
-def run_scan(subnet=None, profile=None):
-    """Runs an nmap scan against the subnet using a scan profile (default: the
-    saved one) and stores results. Returns scan_id or None."""
+def run_scan(subnet=None, profile=None, scope="subnet", interface=None):
+    """Runs an nmap scan using a scan profile (default: the saved one) and
+    stores results. Returns scan_id or None. scope "subnet" scans the subnet
+    on `interface` (default: the selected one); scope "host" scans the
+    single address in `subnet`. Normally called by the job queue worker --
+    use enqueue() so only one scan ever runs at a time."""
     global _raw_caps_cache, _last_scan_end
     if not _scan_lock.acquire(blocking=False):
         return None  # a scan is already running
@@ -491,8 +523,9 @@ def run_scan(subnet=None, profile=None):
     try:
         _stop_requested.clear()
         _last_scan_status["running"] = True
+        _last_scan_status["last_job"] = {"scope": scope, "target": subnet}
         if subnet is None:
-            subnet = get_local_subnet(get_current_interface())
+            subnet = get_local_subnet(interface or get_current_interface())
         if not subnet:
             _last_scan_status["last_error"] = "No subnet detected to scan."
             _last_scan_status["last_outcome"] = "failed"
@@ -536,7 +569,10 @@ def run_scan(subnet=None, profile=None):
         checked = _parse_scaninfo(xml_path)
         finished = datetime.datetime.now().isoformat()
 
-        scan_id = _store_results(subnet, started, finished, hosts, profile, mode, checked)
+        scan_id = _store_results(subnet, started, finished, hosts, profile, mode, checked, scope)
+        _last_scan_status["last_job"] = {
+            "scope": scope, "target": subnet, "hosts": len(hosts),
+            "open_ports": sum(1 for h in hosts for p in h["ports"] if p["state"] == "open")}
 
         _last_scan_status["last_run"] = finished
         _last_scan_status["last_error"] = None
@@ -564,7 +600,8 @@ def run_scan(subnet=None, profile=None):
                 os.remove(xml_path)
         except Exception:
             pass
-        _last_scan_end = time.monotonic()
+        if scope == "subnet":  # host deep scans don't move the auto-scan schedule
+            _last_scan_end = time.monotonic()
         _last_scan_status["outcome_seq"] += 1
         _last_scan_status["running"] = False
         _scan_lock.release()
@@ -676,13 +713,14 @@ def _checked_set(ports_checked):
     return out
 
 
-def _store_results(subnet, started, finished, hosts, profile=None, mode=None, ports_checked=None):
+def _store_results(subnet, started, finished, hosts, profile=None, mode=None, ports_checked=None,
+                   scope="subnet"):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute(
-        "INSERT INTO scans (started_at, finished_at, subnet, host_count, profile, mode, ports_checked) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?)",
-        (started, finished, subnet, len(hosts), profile, mode, ports_checked),
+        "INSERT INTO scans (started_at, finished_at, subnet, host_count, profile, mode, ports_checked, scope) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (started, finished, subnet, len(hosts), profile, mode, ports_checked, scope),
     )
     scan_id = c.lastrowid
 
@@ -713,38 +751,88 @@ def get_latest_scan():
     return get_scan(None)
 
 
+def latest_subnet_scan_id():
+    conn = sqlite3.connect(DB_PATH)
+    row = conn.execute("SELECT MAX(id) FROM scans WHERE COALESCE(scope, 'subnet') = 'subnet'").fetchone()
+    conn.close()
+    return row[0] if row else None
+
+
 def get_scan(scan_id=None):
-    """One scan (default: the latest) with its hosts and ports. Each host
-    also gets "earlier": open ports found by previous scans that this scan
-    doesn't show as open, each marked
-      state "unchecked" -- this scan didn't look at that port (e.g. a
-                           Discovery scan, or Standard after Deep), or
-      state "closed"    -- this scan checked it and it wasn't open any more,
+    """One scan (default: the latest network scan) with its hosts and ports.
+
+    For a network scan, a host that got its own Deep scan afterwards (from
+    the dashboard's per-host button, before the next network scan) shows
+    that Deep scan's results instead, flagged with host["host_scan"].
+
+    Each host also gets "earlier": open ports found by previous scans that
+    the shown results don't list, each marked
+      state "unchecked" -- not looked at this time (e.g. a Discovery scan,
+                           or Standard after Deep), or
+      state "closed"    -- checked and no longer open,
     with when/which profile last saw it open. Hosts are matched across scans
     by MAC address when known, otherwise by IP."""
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     c = conn.cursor()
     if scan_id is None:
-        c.execute("SELECT * FROM scans ORDER BY id DESC LIMIT 1")
+        c.execute("SELECT * FROM scans WHERE COALESCE(scope, 'subnet') = 'subnet' ORDER BY id DESC LIMIT 1")
     else:
         c.execute("SELECT * FROM scans WHERE id = ?", (scan_id,))
     scan = c.fetchone()
     if not scan:
         conn.close()
         return None
+    scan = dict(scan)
+    scan["scope"] = scan.get("scope") or "subnet"
 
-    c.execute("SELECT * FROM hosts WHERE scan_id = ? ORDER BY id", (scan["id"],))
-    hosts = []
-    for h in c.fetchall():
-        c.execute("SELECT * FROM ports WHERE host_id = ? ORDER BY port", (h["id"],))
-        host = dict(h)
-        host["ports"] = [dict(p) for p in c.fetchall()]
-        hosts.append(host)
+    def load_hosts(sid):
+        c.execute("SELECT * FROM hosts WHERE scan_id = ? ORDER BY id", (sid,))
+        out = []
+        for h in c.fetchall():
+            c.execute("SELECT * FROM ports WHERE host_id = ? ORDER BY port", (h["id"],))
+            host = dict(h)
+            host["ports"] = [dict(p) for p in c.fetchall()]
+            out.append(host)
+        return out
 
-    # Earlier scans, newest first, with each host's open ports
+    def hkey(mac, ip):
+        return ("mac", mac.lower()) if mac else ("ip", ip)
+
+    hosts = load_hosts(scan["id"])
+    for h in hosts:
+        h["shown_scan"] = scan          # which scan the card's ports come from
+        h["host_scan"] = None
+
+    # Per-host Deep scans run after this network scan (and before the next)
+    if scan["scope"] == "subnet":
+        nxt = c.execute("SELECT MIN(id) FROM scans WHERE id > ? AND COALESCE(scope, 'subnet') = 'subnet'",
+                        (scan["id"],)).fetchone()[0]
+        c.execute("SELECT * FROM scans WHERE scope = 'host' AND id > ? AND id < ? ORDER BY id DESC",
+                  (scan["id"], nxt if nxt is not None else 2 ** 62))
+        host_scans = [dict(r) for r in c.fetchall()]
+        if host_scans:
+            by_key = {}
+            for h in hosts:
+                by_key.setdefault(hkey(h["mac"], h["ip"]), h)
+                by_key.setdefault(("ip", h["ip"]), h)
+            for hs in host_scans:           # newest first: first match wins
+                for hh in load_hosts(hs["id"]):
+                    card = by_key.get(hkey(hh["mac"], hh["ip"])) or by_key.get(("ip", hh["ip"]))
+                    if card is None or card["host_scan"] is not None:
+                        continue
+                    card["host_scan"] = {"id": hs["id"], "finished_at": hs["finished_at"],
+                                         "profile": hs["profile"]}
+                    card["shown_scan"] = hs
+                    card["ports"] = hh["ports"]
+                    for k in ("os_name", "os_accuracy", "os_type", "hostname", "vendor", "mac"):
+                        if hh.get(k):
+                            card[k] = hh[k]
+
+    # Earlier scans (network and host), newest first, with each host's open ports
+    top = max(h["shown_scan"]["id"] for h in hosts) if hosts else scan["id"]
     c.execute("SELECT id, finished_at, profile, ports_checked FROM scans WHERE id < ? "
-              "ORDER BY id DESC LIMIT ?", (scan["id"], HISTORY_LOOKBACK))
+              "ORDER BY id DESC LIMIT ?", (top, HISTORY_LOOKBACK))
     earlier_scans = [dict(r) for r in c.fetchall()]
     by_scan = {}
     if earlier_scans:
@@ -754,45 +842,44 @@ def get_scan(scan_id=None):
                   f"FROM hosts h LEFT JOIN ports p ON p.host_id = h.id WHERE h.scan_id IN ({q})", ids)
         for r in c.fetchall():
             entry = by_scan.setdefault(r["scan_id"], {})
-            key = ("mac", r["mac"].lower()) if r["mac"] else ("ip", r["ip"])
-            ports = entry.setdefault(key, {})
+            ports = entry.setdefault(hkey(r["mac"], r["ip"]), {})
             if r["port"] is not None and r["state"] == "open":
                 ports[(r["protocol"], r["port"])] = dict(r)
             # also index by IP, for hosts whose MAC isn't known in one of the scans
             entry.setdefault(("ip", r["ip"]), ports)
     conn.close()
 
-    cur_checked = _checked_set(scan["ports_checked"])
-    if cur_checked is None and scan["profile"] == "discovery":
-        cur_checked = set()
     checked_cache = {}
 
+    def checked(sc):
+        if sc["id"] not in checked_cache:
+            chk = _checked_set(sc.get("ports_checked"))
+            if chk is None and sc.get("profile") == "discovery":
+                chk = set()
+            checked_cache[sc["id"]] = chk
+        return checked_cache[sc["id"]]
+
     for host in hosts:
-        key = ("mac", host["mac"].lower()) if host["mac"] else ("ip", host["ip"])
-        # every port this scan reported on (open, or closed/filtered listed by nmap)
+        shown = host.pop("shown_scan")
+        cur_checked = checked(shown)
+        key = hkey(host["mac"], host["ip"])
+        # every port the shown results report on (open, or closed/filtered listed by nmap)
         open_now = {(p["protocol"], p["port"]) for p in host["ports"]}
         decided = set()      # ports whose most recent earlier check we've already used
         earlier = []
         for es in earlier_scans:   # newest first
+            if es["id"] >= shown["id"]:
+                continue
             seen = by_scan.get(es["id"], {})
             ports = seen.get(key) if key in seen else seen.get(("ip", host["ip"]))
             if ports is None:
                 continue           # host not found in that scan: tells us nothing
-            if es["id"] not in checked_cache:
-                chk = _checked_set(es["ports_checked"])
-                if chk is None and es["profile"] == "discovery":
-                    chk = set()
-                checked_cache[es["id"]] = chk
-            chk = checked_cache[es["id"]]
-            # Ports this earlier scan saw open
+            chk = checked(es)
             for pk, row in ports.items():
                 if pk in decided or pk in open_now:
                     continue
                 decided.add(pk)
-                if cur_checked is None or pk not in cur_checked:
-                    state = "unchecked"
-                else:
-                    state = "closed"
+                state = "unchecked" if cur_checked is None or pk not in cur_checked else "closed"
                 earlier.append({
                     "port": pk[1], "protocol": pk[0], "service": row["service"],
                     "product": row["product"], "version": row["version"],
@@ -805,9 +892,8 @@ def get_scan(scan_id=None):
         earlier.sort(key=lambda e: (e["state"] != "unchecked", e["port"]))
         host["earlier"] = earlier
 
-    result = dict(scan)
-    result["hosts"] = hosts
-    return result
+    scan["hosts"] = hosts
+    return scan
 
 
 def get_scan_history(limit=20):
@@ -828,6 +914,7 @@ def get_status():
     status["scan_interval"] = get_scan_interval()
     status["next_in"] = next_scan_in()
     status["mode"] = scan_mode()
+    status["queue"] = queue_summary()
     return status
 
 
@@ -841,6 +928,211 @@ def stop_scan(wait=5.0):
     while _last_scan_status["running"] and time.time() < deadline:
         time.sleep(0.1)
     return True
+
+
+# ---------------------------------------------------------------- job queue
+#
+# Every scan -- SCAN NOW, automatic scans, and per-host Deep scans from the
+# dashboard -- goes through one queue with a single worker thread, so only
+# one nmap ever runs at a time and the Pi never gets overloaded.
+
+MAX_QUEUED = 20
+_queue_wake = threading.Event()
+_current_job = {}  # the running job's row, or empty
+
+
+def _db():
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def _now():
+    return datetime.datetime.now().isoformat()
+
+
+def get_queue_paused():
+    return _get_setting("queue_paused", "0") == "1"
+
+
+def set_queue_paused(paused):
+    """Paused: the running job finishes, queued jobs wait."""
+    _set_setting("queue_paused", "1" if paused else "0")
+    _queue_wake.set()
+
+
+def enqueue(kind, target=None, profile=None, source="manual"):
+    """Adds a scan job. kind "subnet" (target ignored; scans the selected
+    interface's subnet with `profile`, default the saved one) or "host"
+    (target = one IPv4 address, Deep profile unless given). Returns
+    (job_dict, None) or (None, "reason it wasn't queued")."""
+    if kind not in ("subnet", "host"):
+        return None, "Unknown job type."
+    iface = None
+    if kind == "host":
+        try:
+            target = str(ipaddress.IPv4Address(str(target).strip()))
+        except (ipaddress.AddressValueError, ValueError):
+            return None, "Not a valid IPv4 address."
+        profile = profile if profile in PROFILES else "deep"
+    else:
+        target = None
+        iface = get_current_interface()
+        profile = profile if profile in PROFILES else get_profile()
+    conn = _db()
+    try:
+        c = conn.cursor()
+        if kind == "host":
+            dup = c.execute("SELECT * FROM jobs WHERE kind = 'host' AND target = ? AND profile = ? "
+                            "AND status IN ('queued', 'running')", (target, profile)).fetchone()
+        else:
+            dup = c.execute("SELECT * FROM jobs WHERE kind = 'subnet' "
+                            "AND status IN ('queued', 'running')").fetchone()
+        if dup:
+            return None, ("That host is already queued." if kind == "host"
+                          else "A network scan is already queued or running.")
+        n = c.execute("SELECT COUNT(*) FROM jobs WHERE status = 'queued'").fetchone()[0]
+        if n >= MAX_QUEUED:
+            return None, f"Queue is full ({MAX_QUEUED} jobs)."
+        c.execute("INSERT INTO jobs (kind, target, interface, profile, source, status, created_at) "
+                  "VALUES (?, ?, ?, ?, ?, 'queued', ?)", (kind, target, iface, profile, source, _now()))
+        job_id = c.lastrowid
+        conn.commit()
+        job = dict(c.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone())
+    finally:
+        conn.close()
+    _queue_wake.set()
+    _schedule_changed.set()
+    return job, None
+
+
+def cancel_job(job_id):
+    """Removes a queued job, or stops the job that's running."""
+    if _current_job.get("id") == job_id:
+        stop_scan(wait=0)
+        return True
+    conn = _db()
+    n = conn.execute("UPDATE jobs SET status = 'cancelled', finished_at = ? "
+                     "WHERE id = ? AND status = 'queued'", (_now(), job_id)).rowcount
+    conn.commit()
+    conn.close()
+    _schedule_changed.set()
+    return n > 0
+
+
+def cancel_all_queued():
+    conn = _db()
+    conn.execute("UPDATE jobs SET status = 'cancelled', finished_at = ? WHERE status = 'queued'", (_now(),))
+    conn.commit()
+    conn.close()
+    _schedule_changed.set()
+
+
+def move_job_to_front(job_id):
+    """Makes a queued job the next to run (it takes the lowest id slot's
+    turn by being given priority ordering)."""
+    conn = _db()
+    first = conn.execute("SELECT MIN(COALESCE(priority, id)) FROM jobs WHERE status = 'queued'").fetchone()[0]
+    if first is not None:
+        conn.execute("UPDATE jobs SET priority = ? WHERE id = ? AND status = 'queued'", (first - 1, job_id))
+        conn.commit()
+    conn.close()
+
+
+def clear_finished_jobs():
+    conn = _db()
+    conn.execute("DELETE FROM jobs WHERE status NOT IN ('queued', 'running')")
+    conn.commit()
+    conn.close()
+
+
+def get_queue(recent=25):
+    """Running job, queued jobs (in run order) and recent finished jobs."""
+    conn = _db()
+    queued = [dict(r) for r in conn.execute(
+        "SELECT * FROM jobs WHERE status = 'queued' ORDER BY COALESCE(priority, id), id")]
+    done = [dict(r) for r in conn.execute(
+        "SELECT * FROM jobs WHERE status NOT IN ('queued', 'running') ORDER BY id DESC LIMIT ?", (recent,))]
+    conn.close()
+    running = dict(_current_job) if _current_job else None
+    if running:
+        running["progress"] = get_progress()
+    for i, j in enumerate(queued):
+        j["position"] = i + 1
+    return {"running": running, "queued": queued, "recent": done, "paused": get_queue_paused(),
+            "max_queued": MAX_QUEUED}
+
+
+def queue_summary():
+    """Small summary for status displays."""
+    conn = _db()
+    n = conn.execute("SELECT COUNT(*) FROM jobs WHERE status = 'queued'").fetchone()[0]
+    hosts = {r[0]: r[1] for r in conn.execute(
+        "SELECT target, status FROM jobs WHERE kind = 'host' AND status IN ('queued', 'running')")}
+    conn.close()
+    cur = _current_job
+    return {
+        "queued": n,
+        "paused": get_queue_paused(),
+        "current": {k: cur.get(k) for k in ("id", "kind", "target", "profile", "source")} if cur else None,
+        "hosts": hosts,  # ip -> queued/running, for the dashboard's Deep scan buttons
+    }
+
+
+def _subnet_job_pending():
+    conn = _db()
+    n = conn.execute("SELECT COUNT(*) FROM jobs WHERE kind = 'subnet' "
+                     "AND status IN ('queued', 'running')").fetchone()[0]
+    conn.close()
+    return n > 0
+
+
+def queue_worker():
+    """Runs queued jobs one at a time, forever. Call in a daemon thread."""
+    global _current_job
+    while True:
+        try:
+            _queue_wake.clear()
+            if get_queue_paused():
+                _queue_wake.wait()
+                continue
+            conn = _db()
+            row = conn.execute("SELECT * FROM jobs WHERE status = 'queued' "
+                               "ORDER BY COALESCE(priority, id), id LIMIT 1").fetchone()
+            if not row:
+                conn.close()
+                _queue_wake.wait()
+                continue
+            job = dict(row)
+            job["status"] = "running"
+            job["started_at"] = _now()
+            conn.execute("UPDATE jobs SET status = 'running', started_at = ? WHERE id = ?",
+                         (job["started_at"], job["id"]))
+            conn.commit()
+            conn.close()
+            _current_job = job
+
+            if job["kind"] == "host":
+                scan_id = run_scan(subnet=job["target"], profile=job["profile"], scope="host")
+            else:
+                scan_id = run_scan(profile=job["profile"], scope="subnet", interface=job["interface"])
+
+            outcome = _last_scan_status.get("last_outcome")
+            info = _last_scan_status.get("last_job") or {}
+            status = {"complete": "done", "stopped": "stopped"}.get(outcome, "failed")
+            conn = _db()
+            conn.execute(
+                "UPDATE jobs SET status = ?, finished_at = ?, scan_id = ?, target = COALESCE(target, ?), "
+                "hosts = ?, open_ports = ?, error = ? WHERE id = ?",
+                (status, _now(), scan_id, info.get("target"), info.get("hosts"), info.get("open_ports"),
+                 _last_scan_status.get("last_error") if status == "failed" else None, job["id"]))
+            conn.commit()
+            conn.close()
+        except Exception:
+            traceback.print_exc()
+            time.sleep(5)
+        finally:
+            _current_job = {}
 
 
 def get_progress():
@@ -857,7 +1149,8 @@ def get_latest_summary():
     """Small summary of the most recent finished scan, for the kiosk screen."""
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute("SELECT id, finished_at, subnet, host_count, profile FROM scans ORDER BY id DESC LIMIT 1")
+    c.execute("SELECT id, finished_at, subnet, host_count, profile FROM scans "
+              "WHERE COALESCE(scope, 'subnet') = 'subnet' ORDER BY id DESC LIMIT 1")
     row = c.fetchone()
     if not row:
         conn.close()
@@ -895,14 +1188,20 @@ def background_loop():
     whenever the settings change or any scan (manual too) finishes, so the
     countdown always reflects the current settings. Any unexpected error is
     logged and the loop carries on, so automatic scans can't silently stop."""
+    # (init_db() has already run -- app.py calls it before starting threads)
     try:
-        init_db()
         cleanup_stale_temp_files()
     except Exception:
         traceback.print_exc()
     while True:
         try:
             _schedule_changed.clear()
+            if get_auto_scan() and _subnet_job_pending():
+                # a network scan is already waiting/running: count from its end
+                _last_scan_status["next_run"] = None
+                _last_scan_status["next_total"] = None
+                _schedule_changed.wait()
+                continue
             if not get_auto_scan():
                 _last_scan_status["next_run"] = None
                 _last_scan_status["next_total"] = None
@@ -923,9 +1222,11 @@ def background_loop():
             _last_scan_status["next_total"] = int(round(target - since))  # for the kiosk progress bar
             if _schedule_changed.wait(max(0, target - now)):
                 continue  # settings changed or a scan ended: recompute
-            if get_auto_scan() and not _last_scan_status["running"]:
+            if get_auto_scan():
                 _last_scan_status["next_run"] = None
-                run_scan()
+                job, err = enqueue("subnet", source="auto")
+                if err:
+                    time.sleep(5)  # e.g. queue full: try again shortly
         except Exception:
             traceback.print_exc()
             time.sleep(5)

@@ -107,8 +107,7 @@ used only before anything's been selected in the UI:
 
 Automatic scans are **off by default** -- nothing touches the network until
 you press Scan now or switch auto-scan on. Turn it on (and pick 5 / 15 / 30 /
-60 min) from the dashboard's "Auto-scan" dropdown or the Pi screen's AUTO
-button. The setting is saved, so it survives restarts. The first automatic
+60 min) from the dashboard's "Auto-scan" dropdown. The setting is saved, so it survives restarts. The first automatic
 scan runs a minute after switching on (or after boot); after that, the
 interval is counted from the end of the last scan -- a manual scan resets
 the countdown too. Automatic scans use the selected profile.
@@ -122,6 +121,22 @@ and on the **Deep** profile, OS fingerprinting (`-O --osscan-limit
 capability is missing (e.g. nmap was upgraded -- re-run `setup.sh`), Aliana
 falls back to TCP connect scans without OS detection and says so on the
 dashboard ("Mode: Connect") and in the Pi screen's boot sequence.
+
+## Scan queue
+
+Every scan goes through one queue and runs one at a time, so the Pi is never
+running two nmaps at once: SCAN NOW, automatic scans, and per-host **Deep
+scan** buttons (on each host card on the dashboard). The **Queue** page
+(`/queue`) shows the running job live (phase, %, hosts, ports found, stop),
+the waiting jobs (run next / cancel), recent jobs with links to their
+results, and lets you pause/resume the queue, cancel everything waiting,
+queue a Deep scan of any IP, or queue a network scan with any profile. Up to
+20 jobs can wait; the same host can't be queued twice. Jobs still waiting
+when Aliana restarts are cancelled rather than run unattended.
+
+A host's Deep scan results replace that host's card on the dashboard (tagged
+"Deep scan · time") until the next network scan. The Pi screen shows a small
+QUEUE n ticker in its header; manage the queue from the browser.
 
 ## Scan history and "last seen" ports
 
@@ -151,7 +166,8 @@ kiosk mode, `setup.sh` already wires this up. Chromium opens straight to
 `/kiosk` once Aliana's Flask server is answering: a single, no-scroll
 screen showing the scan in progress live (phase, % done, hosts up, open
 ports as they're found), a summary of the last scan when idle, and
-buttons for Scan now, cycling the scan interface, auto-scan, and Wi-Fi. The full detail stays
+buttons for Scan now, cycling the scan interface, and Wi-Fi. Auto-scan is
+set from the browser dashboard; the Pi screen shows its countdown. The full detail stays
 on the browser dashboard at `/`.
 
 ## Scan profiles

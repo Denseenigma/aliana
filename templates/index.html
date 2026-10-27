@@ -300,6 +300,28 @@
   tr.earlier.closed td.port { color: var(--red); text-decoration: line-through; }
   tr.earlier .seen { display: block; font-size: 0.72rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
   tr.earlier.closed .seen { color: var(--red); }
+  .nav a .qbadge { display: inline-block; margin-left: 6px; min-width: 18px; padding: 0 5px; background: var(--accent); color: #000; text-align: center; letter-spacing: 0; }
+  .nav a.on .qbadge { background: #000; color: var(--accent); }
+  .nav a .qbadge[hidden] { display: none; }
+  a.qlink { text-decoration: none; }
+  a.qlink:hover b { color: var(--accent); }
+  .hs-tag {
+    align-self: flex-start; margin-top: 6px; font-size: 0.7rem; letter-spacing: 0.12em; text-transform: uppercase;
+    color: var(--red); box-shadow: inset 0 0 0 1px var(--red); padding: 2px 7px 1px; text-decoration: none;
+  }
+  .hs-tag:hover { background: var(--red); color: #000; }
+  .host { display: flex; flex-direction: column; }
+  .host-actions { margin-top: auto; padding-top: 10px; display: flex; align-items: center; gap: 10px; }
+  .host-actions .deep-msg { font-size: 0.75rem; letter-spacing: 0.06em; color: var(--muted); }
+  .host-actions .deep-msg.err { color: var(--red); }
+  button.deep-btn {
+    background: transparent; color: var(--red); box-shadow: inset 0 0 0 1px var(--red);
+    font-family: var(--sans); font-size: 0.8rem; letter-spacing: 0.14em; padding: 6px 16px 5px 12px;
+    clip-path: polygon(0 0, 100% 0, 100% calc(100% - 8px), calc(100% - 8px) 100%, 0 100%);
+  }
+  button.deep-btn:hover { background: var(--red); color: #000; }
+  button.deep-btn:disabled { cursor: default; background: transparent; color: var(--muted); box-shadow: inset 0 0 0 1px var(--border); }
+  button.deep-btn.running:disabled { color: var(--red); box-shadow: inset 0 0 0 1px var(--red); animation: stopflash 1s steps(1) infinite; }
   .error-banner.viewing a { color: var(--accent); margin-left: 10px; }
   a.hrow { color: inherit; text-decoration: none; }
   a.hrow:hover { background: rgba(255, 122, 0, 0.08); }
@@ -427,12 +449,15 @@
     </svg>
     Aliana <small>network recon</small>
   </h1>
-  <nav class="nav"><a href="/" class="on">Dashboard</a><a href="/wifi">Wi-Fi</a><button type="button" class="screen-btn" id="mirror-open-btn" title="Live, interactive view of the Pi's onboard screen"><span class="dot"></span>Pi screen</button></nav>
+  <nav class="nav"><a href="/" class="on">Dashboard</a><a href="/queue">Queue<span class="qbadge" id="qbadge" {% if not (status.queue.queued + (1 if status.queue.current else 0)) %}hidden{% endif %}>{{ (status.queue.queued + (1 if status.queue.current else 0)) }}</span></a><a href="/wifi">Wi-Fi</a><button type="button" class="screen-btn" id="mirror-open-btn" title="Live, interactive view of the Pi's onboard screen"><span class="dot"></span>Pi screen</button></nav>
 
   <div class="controls">
     <div class="state {{ 'running' if status.running else '' }}">
       <span class="dot"></span>{{ 'Scanning' if status.running else 'Idle' }}
     </div>
+    {% set cur = status.queue.current %}
+    {% if status.running and cur and cur.kind == 'host' %}<span class="kv">Target <b>{{ cur.target }} &middot; {{ profiles[cur.profile].label if cur.profile in profiles else cur.profile }}</b></span>{% endif %}
+    {% if status.queue.queued or status.queue.paused %}<a class="kv qlink" href="/queue">Queue <b>{{ status.queue.queued }} waiting{% if status.queue.paused %} &middot; paused{% endif %}</b></a>{% endif %}
     <span class="kv">Last run <b>{{ status.last_run | when }}</b></span>
     <span class="kv" title="{{ 'Raw sockets: ARP discovery, SYN scans, OS detection on Deep' if status.mode == 'syn' else 'No raw sockets: TCP connect scans, no OS detection (re-run setup.sh)' }}">Mode <b class="{{ 'ok' if status.mode == 'syn' else 'warn' }}">{{ 'SYN' if status.mode == 'syn' else 'Connect' }}</b></span>
     <span class="kv">Auto-scan <b id="next-auto" data-next="{{ status.next_in if status.next_in is not none else '' }}">{% if not status.auto_scan %}off{% elif status.running %}after this scan{% elif status.next_in is not none %}in {{ (status.next_in // 60) }}:{{ '%02d' % (status.next_in % 60) }}{% else %}scheduled{% endif %}</b></span>
@@ -530,6 +555,9 @@
               {% if closed %}<span class="tag closed" title="Open in an earlier scan; closed or filtered now">{{ closed | length }} closed</span>{% endif %}
               </span>
             </div>
+            {% if host.host_scan %}
+            <a class="hs-tag" href="{{ url_for('view_scan', scan_id=host.host_scan.id) }}" title="Results below are from this host's own scan">{{ profiles[host.host_scan.profile].label if host.host_scan.profile in profiles else 'Host' }} scan &middot; {{ host.host_scan.finished_at | when }}</a>
+            {% endif %}
             <div class="meta">
               {% if host.ip in own_ips %}<span class="tag">THIS UNIT</span>
               {% elif host.mac %}{% if host.vendor %}{{ host.vendor }} &middot; {% endif %}<span class="mac">{{ host.mac }}</span>
@@ -565,6 +593,15 @@
             {% else %}
             <div class="empty">No open ports in the scanned range</div>
             {% endif %}
+            {% if host.ip not in own_ips %}
+            {% set qs = status.queue.hosts.get(host.ip) %}
+            <div class="host-actions">
+              <button type="button" class="deep-btn {{ qs or '' }}" data-ip="{{ host.ip }}" {{ 'disabled' if qs else '' }}
+                      title="Queue a Deep scan (top 1000 ports, full probing{{ ', OS guess' if status.mode == 'syn' else '' }}) of just this host">
+                {{ 'Scanning…' if qs == 'running' else 'Queued' if qs == 'queued' else 'Deep scan' }}</button>
+              <span class="deep-msg"></span>
+            </div>
+            {% endif %}
           </div>
         {% endfor %}
         </div>
@@ -584,7 +621,7 @@
           <span class="t">{{ h.finished_at | when }}</span>
           <span class="n">{{ h.host_count }}<small>hosts</small></span>
           <span class="sub">{{ h.subnet }}</span>
-          <span class="sub sub-r">{% if h.profile and h.profile in profiles %}<span class="tag {{ h.profile }}">{{ profiles[h.profile].label }}</span>{% endif %}</span>
+          <span class="sub sub-r">{% if h.scope == 'host' %}<span class="tag outline">Host</span> {% endif %}{% if h.profile and h.profile in profiles %}<span class="tag {{ h.profile }}">{{ profiles[h.profile].label }}</span>{% endif %}</span>
         </a>
         {% endfor %}
       </div>
@@ -684,6 +721,41 @@
       })
       .catch(function () {});
   }, 5000);
+})();
+
+// Per-host "Deep scan" buttons: queue a Deep scan of just that host.
+(function () {
+  var badge = document.getElementById("qbadge");
+  document.querySelectorAll(".deep-btn").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      var msg = btn.parentNode.querySelector(".deep-msg");
+      btn.disabled = true;
+      btn.textContent = "Queuing\u2026";
+      fetch("/api/queue/host", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ip: btn.getAttribute("data-ip") })
+      })
+        .then(function (r) { return r.json(); })
+        .then(function (d) {
+          if (d.ok) {
+            btn.className = "deep-btn queued";
+            btn.textContent = "Queued";
+            msg.className = "deep-msg";
+            msg.innerHTML = d.queue.queued > 1 ? "#" + d.queue.queued + " in <a href=\"/queue\">queue</a>"
+                                               : "Starting shortly";
+            var n = d.queue.queued + (d.queue.current ? 1 : 0);
+            if (badge) { badge.textContent = n; badge.hidden = !n; }
+          } else {
+            btn.disabled = false;
+            btn.textContent = "Deep scan";
+            msg.className = "deep-msg err";
+            msg.textContent = d.error || "Couldn't queue";
+          }
+        })
+        .catch(function () { btn.disabled = false; btn.textContent = "Deep scan"; });
+    });
+  });
 })();
 
 // Pi screen viewer: embeds the onboard-screen page (/kiosk) at its native
