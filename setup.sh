@@ -59,15 +59,61 @@ Section "InputClass"
 EndSection
 EOF
 
+echo "==> Configuring wired Ethernet (eth0) for plug-in-anytime DHCP..."
+# eth0 gets one owner -- systemd-networkd -- with DHCP that reacts to the
+# cable being plugged in at any time, not just at boot. Without an explicit
+# owner, eth0 could end up with nobody running DHCP on it after a late plug-in.
+# "05-" so it is the first .network file matching eth0 (networkd uses the
+# first match in name order).
+sudo mkdir -p /etc/systemd/network
+sudo tee /etc/systemd/network/05-aliana-eth0.network > /dev/null <<'EOF'
+# Installed by Aliana's setup.sh
+[Match]
+Name=eth0
+
+[Network]
+DHCP=ipv4
+
+[DHCPv4]
+# Identify by MAC, which is what most corporate DHCP servers expect
+ClientIdentifier=mac
+# Prefer wired over Wi-Fi (NetworkManager uses 600 for Wi-Fi)
+RouteMetric=100
+
+[Link]
+# Don't make boot wait for a cable that may never be plugged in
+RequiredForOnline=no
+EOF
+for f in /etc/systemd/network/*.network; do
+    [ "$f" = /etc/systemd/network/05-aliana-eth0.network ] && continue
+    if grep -qE '^Name=.*\beth' "$f" 2>/dev/null; then
+        echo "    note: $f also matches eth0 (the first file by name wins)"
+    fi
+done
+sudo systemctl enable systemd-networkd >/dev/null 2>&1
+# reload (not restart) so an SSH session over usb0 isn't disturbed
+if systemctl is-active --quiet systemd-networkd; then
+    sudo networkctl reload
+else
+    sudo systemctl start systemd-networkd
+fi
+# dhcpcd (older Pi OS) would also run DHCP on eth0 and fight networkd
+if systemctl is-active --quiet dhcpcd 2>/dev/null && [ -f /etc/dhcpcd.conf ] && \
+        ! grep -qE '^denyinterfaces.*\beth0\b' /etc/dhcpcd.conf; then
+    echo "denyinterfaces eth0" | sudo tee -a /etc/dhcpcd.conf > /dev/null
+    sudo systemctl restart dhcpcd
+    echo "    told dhcpcd to leave eth0 alone"
+fi
+
 echo "==> Setting up NetworkManager for Wi-Fi..."
 # Wi-Fi is managed through NetworkManager. If systemd-networkd already runs
 # other interfaces (e.g. usb0 for the USB gadget link, eth0), leave those to
 # networkd and let NetworkManager handle only Wi-Fi, so the two don't fight.
-UNMANAGED="interface-name:usb0"
+UNMANAGED="interface-name:usb0;interface-name:eth0"
 if systemctl is-active --quiet systemd-networkd; then
     for name in $(grep -hoP '^Name=\K\S+' /etc/systemd/network/*.network 2>/dev/null | sort -u); do
         case "$name" in
-            wl*|usb0) ;;  # Wi-Fi stays with NetworkManager; usb0 already listed
+            wl*|usb0|eth0) ;;  # Wi-Fi stays with NetworkManager; usb0/eth0 already listed
             *) UNMANAGED="$UNMANAGED;interface-name:$name" ;;
         esac
     done
@@ -100,6 +146,8 @@ if systemctl is-active --quiet NetworkManager; then
 else
     sudo systemctl start NetworkManager
 fi
+# NetworkManager has now let go of eth0; have networkd pick it up
+sudo networkctl reconfigure eth0 2>/dev/null || true
 
 echo "==> Allowing Aliana to manage Wi-Fi (NetworkManager polkit rule)..."
 # The aliana service runs as a normal user (User= in aliana.service). This
