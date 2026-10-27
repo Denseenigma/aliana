@@ -1,0 +1,402 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Aliana Wi-Fi</title>
+<style>
+  :root {
+    /* Theme: NERV-terminal inspired (matches index.html / kiosk.html) */
+    --bg: #000;
+    --panel: #0b0603;
+    --border: #6b3200;
+    --text: #ffd9b0;
+    --muted: #b06a2c;
+    --accent: #ff7a00;
+    --green: #50ff50;
+    --red: #ff2626;
+    --title: "Times New Roman", "Liberation Serif", "DejaVu Serif", serif;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 20px;
+    background: var(--bg);
+    color: var(--text);
+    font-family: ui-monospace, "SF Mono", "Cascadia Code", Consolas, monospace;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='28' height='48' viewBox='0 0 28 48'%3E%3Cpath d='M14 0 L28 8 L28 24 L14 32 L0 24 L0 8 Z M14 32 L14 48' fill='none' stroke='%23ff7a00' stroke-opacity='0.06'/%3E%3C/svg%3E");
+  }
+  .wrap { max-width: 720px; margin: 0 auto; }
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 12px;
+    position: relative;
+    padding-bottom: 20px;
+    margin-bottom: 20px;
+  }
+  header::after {
+    content: "";
+    position: absolute;
+    left: 0; right: 0; bottom: 0;
+    height: 8px;
+    background: repeating-linear-gradient(-45deg, var(--accent) 0 8px, #000 8px 16px);
+    opacity: 0.8;
+  }
+  h1 {
+    margin: 0;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    background: var(--accent);
+    color: #000;
+    font-family: var(--title);
+    font-size: 1.6rem;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    padding: 2px 26px 2px 10px;
+    clip-path: polygon(0 0, 100% 0, calc(100% - 14px) 100%, 0 100%);
+  }
+  h1 span { font-size: 0.9rem; letter-spacing: 0.15em; opacity: 0.7; }
+  h1 svg { width: 28px; height: 24px; }
+  nav { display: flex; gap: 4px; }
+  nav a {
+    color: var(--accent);
+    text-decoration: none;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    font-size: 0.8rem;
+    padding: 6px 12px;
+    border: 1px solid var(--border);
+  }
+  nav a.on { background: var(--accent); color: #000; border-color: var(--accent); }
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--accent);
+    padding: 14px 16px 16px;
+    margin-bottom: 18px;
+    clip-path: polygon(0 0, calc(100% - 16px) 0, 100% 16px, 100% 100%, 0 100%);
+  }
+  .panel-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 12px;
+    gap: 10px;
+  }
+  h2 {
+    display: inline-block;
+    margin: 0;
+    background: var(--accent);
+    color: #000;
+    font-size: 0.8rem;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    padding: 2px 10px;
+  }
+  button {
+    background: var(--accent);
+    color: #000;
+    border: none;
+    font-family: var(--title);
+    font-weight: bold;
+    font-size: 0.95rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    padding: 8px 20px 8px 14px;
+    cursor: pointer;
+    clip-path: polygon(0 0, 100% 0, 100% calc(100% - 9px), calc(100% - 9px) 100%, 0 100%);
+  }
+  button:hover { background: #ffa040; }
+  button:disabled { background: var(--border); color: var(--accent); cursor: default; }
+  button.ghost {
+    background: transparent;
+    color: var(--accent);
+    box-shadow: inset 0 0 0 1px var(--accent);
+    clip-path: none;
+    font-family: inherit;
+    font-weight: normal;
+    font-size: 0.75rem;
+    padding: 5px 10px;
+  }
+  button.ghost:hover { background: var(--border); }
+  .link {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 6px 18px;
+    font-size: 0.9rem;
+  }
+  .link dt { color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em; font-size: 0.75rem; padding-top: 2px; }
+  .link dd { margin: 0; }
+  .ok { color: var(--green); }
+  .bad { color: var(--red); }
+  .muted { color: var(--muted); }
+  .net {
+    border: 1px solid var(--border);
+    margin-bottom: 6px;
+    background: #000;
+  }
+  .net-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 12px;
+    cursor: pointer;
+  }
+  .net-row:hover { background: #140a03; }
+  .net-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .tag {
+    font-size: 0.65rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    padding: 1px 6px;
+    border: 1px solid var(--border);
+    color: var(--muted);
+  }
+  .tag.live { border-color: var(--green); color: var(--green); }
+  .bars { display: inline-flex; align-items: flex-end; gap: 2px; height: 14px; }
+  .bars i { width: 4px; background: var(--border); display: block; }
+  .bars i.on { background: var(--accent); }
+  .lock { width: 12px; color: var(--muted); font-size: 0.8rem; }
+  .join {
+    display: none;
+    gap: 8px;
+    padding: 0 12px 12px;
+    flex-wrap: wrap;
+  }
+  .net.open .join { display: flex; }
+  input[type=password], input[type=text] {
+    flex: 1;
+    min-width: 180px;
+    background: #000;
+    color: var(--text);
+    border: 1px solid var(--accent);
+    padding: 8px 10px;
+    font-family: inherit;
+    font-size: 1rem;
+  }
+  input:focus { outline: 2px solid var(--accent); outline-offset: -2px; }
+  .msg {
+    padding: 10px 12px;
+    margin-bottom: 18px;
+    border: 1px solid var(--accent);
+    display: none;
+  }
+  .msg.show { display: block; }
+  .msg.error { border-color: var(--red); color: var(--red); background: #1a0000; }
+  .msg.success { border-color: var(--green); color: var(--green); background: #001a00; }
+  .saved-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 8px 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .saved-row:last-child { border-bottom: none; }
+  .hidden-form { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+  details summary { cursor: pointer; color: var(--muted); font-size: 0.8rem; margin-top: 12px; text-transform: uppercase; letter-spacing: 0.08em; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>
+    <svg viewBox="0 0 120 100" xmlns="http://www.w3.org/2000/svg" fill="currentColor" aria-hidden="true">
+      <path d="M30 70 L10 85 L35 78 Z"/>
+      <ellipse cx="55" cy="60" rx="22" ry="14" transform="rotate(-10 55 60)"/>
+      <path d="M50 50 C40 20, 70 15, 85 35 C70 30, 55 35, 50 50 Z"/>
+      <circle cx="82" cy="45" r="11"/>
+      <path d="M92 45 L104 42 L92 50 Z"/>
+      <path d="M60 72 L58 88 M68 73 L70 89" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"/>
+    </svg>
+    Aliana <span>wireless link</span>
+  </h1>
+  <nav><a href="/">Dashboard</a><a href="/wifi" class="on">Wi-Fi</a></nav>
+</header>
+
+<div class="msg" id="msg"></div>
+
+<section class="panel">
+  <div class="panel-head"><h2>Current link</h2></div>
+  <dl class="link" id="link"><dt>Status</dt><dd class="muted">Loading&hellip;</dd></dl>
+</section>
+
+<section class="panel">
+  <div class="panel-head">
+    <h2>Available networks</h2>
+    <button class="ghost" id="scan-btn" type="button">Rescan</button>
+  </div>
+  <div id="networks"><div class="muted">Scanning&hellip;</div></div>
+  <details>
+    <summary>Join a hidden network</summary>
+    <form class="hidden-form" id="hidden-form">
+      <input type="text" id="hidden-ssid" placeholder="Network name" autocomplete="off" required>
+      <input type="password" id="hidden-pw" placeholder="Password (blank if open)" autocomplete="new-password">
+      <button type="submit">Connect</button>
+    </form>
+  </details>
+</section>
+
+<section class="panel">
+  <div class="panel-head"><h2>Saved networks</h2></div>
+  <div id="saved"><div class="muted">Loading&hellip;</div></div>
+</section>
+
+</div>
+
+<script>
+(function () {
+  var $ = function (id) { return document.getElementById(id); };
+  var busy = false;
+
+  function esc(s) {
+    return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+    });
+  }
+
+  function bars(signal) {
+    var n = signal >= 75 ? 4 : signal >= 50 ? 3 : signal >= 25 ? 2 : signal > 0 ? 1 : 0;
+    var h = "";
+    for (var i = 1; i <= 4; i++) h += '<i class="' + (i <= n ? "on" : "") + '" style="height:' + (i * 3 + 2) + 'px"></i>';
+    return '<span class="bars" title="' + signal + '%">' + h + "</span>";
+  }
+
+  function message(text, kind) {
+    var m = $("msg");
+    m.textContent = text || "";
+    m.className = "msg" + (text ? " show " + (kind || "") : "");
+  }
+
+  function api(url, body) {
+    var opts = body ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) } : { cache: "no-store" };
+    return fetch(url, opts).then(function (r) {
+      return r.json().then(function (d) {
+        if (!d.ok) throw new Error(d.error || "Request failed");
+        return d;
+      });
+    });
+  }
+
+  function renderLink(d) {
+    var s = d.status, html = "";
+    if (!s.available) {
+      html = '<dt>Status</dt><dd class="bad">No Wi-Fi adapter found</dd>';
+    } else if (!s.radio) {
+      html = '<dt>Status</dt><dd class="bad">Wi-Fi radio is off</dd><dt></dt><dd class="muted">Scanning or connecting will switch it on.</dd>';
+    } else if (s.state === "connected") {
+      html = '<dt>Status</dt><dd class="ok">Connected</dd>' +
+        "<dt>Network</dt><dd>" + esc(s.ssid || s.connection) + "</dd>" +
+        "<dt>Signal</dt><dd>" + (s.signal != null ? bars(s.signal) + " " + s.signal + "%" : "&ndash;") + "</dd>" +
+        "<dt>Address</dt><dd>" + esc(s.ip || "&ndash;") + "</dd>";
+    } else {
+      html = '<dt>Status</dt><dd class="bad">' + esc(s.state === "connecting" ? "Connecting…" : "Not connected") + "</dd>";
+    }
+    html += "<dt>Adapter</dt><dd>" + esc(s.device || "&ndash;") + "</dd>";
+    $("link").innerHTML = html;
+
+    if (!d.saved.length) {
+      $("saved").innerHTML = '<div class="muted">No saved networks.</div>';
+    } else {
+      $("saved").innerHTML = d.saved.map(function (n) {
+        return '<div class="saved-row"><span>' + esc(n.ssid) +
+          (n.active ? ' <span class="tag live">active</span>' : "") +
+          '</span><button class="ghost" type="button" data-forget="' + esc(n.name) + '">Forget</button></div>';
+      }).join("");
+    }
+  }
+
+  function loadLink() {
+    return api("/api/wifi").then(renderLink).catch(function (e) { message(e.message, "error"); });
+  }
+
+  function renderNetworks(list) {
+    if (!list.length) {
+      $("networks").innerHTML = '<div class="muted">No networks found. Try Rescan.</div>';
+      return;
+    }
+    $("networks").innerHTML = list.map(function (n, i) {
+      var needPw = n.secure && !n.saved;
+      return '<div class="net" data-i="' + i + '">' +
+        '<div class="net-row">' + bars(n.signal) +
+        '<span class="net-name">' + esc(n.ssid) + "</span>" +
+        (n.in_use ? '<span class="tag live">connected</span>' : n.saved ? '<span class="tag">saved</span>' : "") +
+        '<span class="lock">' + (n.secure ? '<svg viewBox="0 0 10 12" width="10" height="12" fill="currentColor"><path d="M2 5V3.5a3 3 0 0 1 6 0V5h1v7H1V5h1zm1.3 0h3.4V3.5a1.7 1.7 0 0 0-3.4 0V5z"/></svg>' : "") + "</span></div>" +
+        '<form class="join" data-ssid="' + esc(n.ssid) + '">' +
+        (needPw ? '<input type="password" placeholder="Password" autocomplete="new-password" required>' :
+          n.saved && n.secure ? '<input type="password" placeholder="Saved password (or type a new one)" autocomplete="new-password">' : "") +
+        '<button type="submit"' + (n.in_use ? " disabled" : "") + ">" + (n.in_use ? "Connected" : "Connect") + "</button></form></div>";
+    }).join("");
+  }
+
+  function scan() {
+    $("scan-btn").disabled = true;
+    $("scan-btn").textContent = "Scanning…";
+    return api("/api/wifi/scan").then(function (d) { renderNetworks(d.networks); })
+      .catch(function (e) { $("networks").innerHTML = '<div class="bad">' + esc(e.message) + "</div>"; })
+      .then(function () { $("scan-btn").disabled = false; $("scan-btn").textContent = "Rescan"; });
+  }
+
+  function connect(ssid, password, button) {
+    if (busy) return;
+    busy = true;
+    var label = button.textContent;
+    button.disabled = true;
+    button.textContent = "Connecting…";
+    message("Connecting to " + ssid + "… this can take up to 30 seconds.");
+    api("/api/wifi/connect", { ssid: ssid, password: password })
+      .then(function (d) {
+        var ip = d.status && d.status.ip;
+        message("Connected to " + ssid + (ip ? " — Aliana is now at http://" + ip + ":8080" : "") + ".", "success");
+        return Promise.all([loadLink(), scan()]);
+      })
+      .catch(function (e) {
+        message(e.message, "error");
+        button.disabled = false;
+        button.textContent = label;
+      })
+      .then(function () { busy = false; });
+  }
+
+  $("networks").addEventListener("click", function (e) {
+    var row = e.target.closest(".net-row");
+    if (!row) return;
+    var net = row.parentNode, wasOpen = net.classList.contains("open");
+    Array.prototype.forEach.call(document.querySelectorAll(".net.open"), function (n) { n.classList.remove("open"); });
+    if (!wasOpen) {
+      net.classList.add("open");
+      var input = net.querySelector("input");
+      if (input) input.focus();
+    }
+  });
+  $("networks").addEventListener("submit", function (e) {
+    e.preventDefault();
+    var form = e.target, input = form.querySelector("input");
+    connect(form.getAttribute("data-ssid"), input ? input.value : "", form.querySelector("button"));
+  });
+  $("hidden-form").addEventListener("submit", function (e) {
+    e.preventDefault();
+    connect($("hidden-ssid").value.trim(), $("hidden-pw").value, e.target.querySelector("button"));
+  });
+  $("saved").addEventListener("click", function (e) {
+    var name = e.target.getAttribute("data-forget");
+    if (!name) return;
+    e.target.disabled = true;
+    api("/api/wifi/forget", { name: name })
+      .then(function () { message("Forgot " + name + ".", "success"); return Promise.all([loadLink(), scan()]); })
+      .catch(function (err) { message(err.message, "error"); e.target.disabled = false; });
+  });
+  $("scan-btn").addEventListener("click", scan);
+
+  loadLink();
+  scan();
+  setInterval(function () { if (!busy) loadLink(); }, 10000);
+})();
+</script>
+</body>
+</html>

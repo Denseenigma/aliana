@@ -11,12 +11,15 @@ includes a kiosk-mode setup for displaying it on an attached screen.
 aliana/
   app.py              Flask app
   scanner.py           nmap wrapper + SQLite storage
+  wifi.py              Wi-Fi management via NetworkManager (nmcli)
+  qr.py                tiny built-in QR code generator (no dependencies)
   requirements.txt
   aliana.service       systemd unit (expects the repo cloned at ~/aliana)
   setup.sh             one-time/after-pull install steps (Pi only)
   templates/
     index.html          full dashboard (browser)
     kiosk.html          compact control screen for the 480x320 display
+    wifi.html           Wi-Fi setup page (desktop + phone)
   kiosk/
     .xinitrc             launches Chromium in kiosk mode on boot
     bash_profile_snippet.sh   autostarts X on the console login
@@ -117,6 +120,22 @@ screen showing the scan in progress live (phase, % done, hosts up, open
 ports as they're found), a summary of the last scan when idle, and two
 buttons -- Scan now, and cycle the scan interface. The full detail stays
 on the browser dashboard at `/`.
+
+## Wi-Fi setup
+
+Open **Wi-Fi** from the dashboard header (`/wifi`) -- e.g. from your
+computer over the USB gadget link. It shows the current link, lists
+nearby networks (tap one, enter the password, Connect), and lets you
+forget saved networks. Changes go through NetworkManager; `setup.sh`
+installs a polkit rule so the service user is allowed to make them.
+
+On the onboard screen, the **WI-FI** button shows the current network,
+signal and address, plus a QR code that opens the Wi-Fi page on a phone
+(the phone needs to be on a network that can reach the Pi).
+
+If Wi-Fi shows as off or never finds networks on a fresh Pi, the Wi-Fi
+country may not be set yet: `sudo raspi-config nonint do_wifi_country US`
+(use your country code), then reboot.
 
 ## Notes
 

@@ -248,7 +248,7 @@
   /* Controls */
   .controls {
     display: grid;
-    grid-template-columns: 3fr 2fr;
+    grid-template-columns: 2fr 1fr 1fr;
     gap: 5px;
   }
   button {
@@ -276,6 +276,80 @@
   button.secondary:active { background: var(--line-dim); }
   button:disabled { background: var(--line-dim); color: var(--orange); opacity: 0.8; }
   button.secondary:disabled { background: transparent; color: var(--line-dim); box-shadow: inset 0 0 0 1px var(--line-dim); }
+  /* Wi-Fi panel (opens over everything, inside the safe area) */
+  .wifi-panel {
+    position: fixed;
+    top: var(--inset-top);
+    right: var(--inset-right);
+    bottom: var(--inset-bottom);
+    left: var(--inset-left);
+    z-index: 10;
+    display: none;
+    flex-direction: column;
+    gap: 6px;
+    padding: 5px 6px 6px;
+    background: #000;
+  }
+  .wifi-panel.show { display: flex; }
+  .wifi-head { display: flex; align-items: stretch; gap: 6px; height: 34px; }
+  .wifi-title {
+    display: flex;
+    align-items: center;
+    padding: 0 16px 0 8px;
+    background: var(--orange);
+    color: #000;
+    font-family: var(--title);
+    font-weight: bold;
+    font-size: 17px;
+    letter-spacing: 0.05em;
+    clip-path: polygon(0 0, 100% 0, calc(100% - 8px) 100%, 0 100%);
+  }
+  .wifi-head .hazard { flex: 1; width: auto; opacity: 0.5; }
+  .wifi-head button { height: 34px; padding: 0 14px; }
+  .wifi-body {
+    flex: 1;
+    min-height: 0;
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 10px;
+  }
+  .qr {
+    width: 176px;
+    height: 176px;
+    align-self: center;
+    border: 2px solid var(--orange);
+    background: #ffd9b0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .qr img { width: 100%; height: 100%; display: block; }
+  .qr .none { color: #000; font-size: 11px; text-align: center; padding: 10px; }
+  .wifi-info {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    min-width: 0;
+    border-left: 3px solid var(--line);
+    padding-left: 10px;
+  }
+  .wifi-row .k { font-size: 10px; letter-spacing: 0.12em; color: var(--muted); }
+  .wifi-row .v {
+    font-family: var(--mono);
+    font-size: 14px;
+    color: var(--text);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    text-transform: none;
+  }
+  .wifi-row .v.ok { color: var(--green); text-transform: uppercase; }
+  .wifi-row .v.bad { color: var(--red); text-transform: uppercase; }
+  .sig { display: inline-flex; align-items: flex-end; gap: 2px; height: 13px; margin-right: 6px; }
+  .sig i { display: block; width: 4px; background: var(--line-dim); }
+  .sig i.on { background: var(--green); }
+  .wifi-hint { margin-top: auto; font-size: 10px; letter-spacing: 0.08em; color: var(--orange); line-height: 13px; }
+  .wifi-url { font-family: var(--mono); font-size: 11px; color: var(--text); text-transform: none; word-break: break-all; }
   #scan-btn.busy { background: var(--red); color: #000; opacity: 1; animation: pulse 1.6s ease-in-out infinite; }
   @keyframes pulse { 50% { opacity: 0.6; } }
 </style>
@@ -318,6 +392,26 @@
 <section class="controls">
   <button id="scan-btn" type="button">SCAN NOW</button>
   <button id="iface-btn" class="secondary" type="button">IFACE &#x21bb;</button>
+  <button id="wifi-btn" class="secondary" type="button">WI-FI</button>
+</section>
+
+<section class="wifi-panel" id="wifi-panel">
+  <div class="wifi-head">
+    <div class="wifi-title">WIRELESS LINK</div>
+    <div class="hazard"></div>
+    <button id="wifi-close" class="secondary" type="button">CLOSE</button>
+  </div>
+  <div class="wifi-body">
+    <div class="qr" id="wifi-qr"><div class="none">Loading&hellip;</div></div>
+    <div class="wifi-info">
+      <div class="wifi-row"><div class="k">STATUS</div><div class="v" id="wifi-state">&ndash;</div></div>
+      <div class="wifi-row"><div class="k">NETWORK</div><div class="v" id="wifi-ssid">&ndash;</div></div>
+      <div class="wifi-row"><div class="k">SIGNAL / ADDRESS</div><div class="v" id="wifi-sig">&ndash;</div></div>
+      <div class="wifi-hint">SCAN WITH YOUR PHONE (ON THE SAME NETWORK) OR OPEN ON YOUR COMPUTER TO SET UP WI-FI:
+        <div class="wifi-url" id="wifi-url"></div>
+      </div>
+    </div>
+  </div>
 </section>
 
 <script>
@@ -482,6 +576,56 @@
     $("scan-btn").textContent = "STARTING…";
     post("/api/scan");
   });
+  // ---- Wi-Fi panel ----
+  var wifiTimer = null, lastQrUrl = null;
+
+  function sigBars(signal) {
+    var n = signal >= 75 ? 4 : signal >= 50 ? 3 : signal >= 25 ? 2 : signal > 0 ? 1 : 0, h = "";
+    for (var i = 1; i <= 4; i++) h += '<i class="' + (i <= n ? "on" : "") + '" style="height:' + (i * 3 + 1) + 'px"></i>';
+    return '<span class="sig">' + h + "</span>";
+  }
+
+  function renderWifi(d) {
+    var s = d.status, st = $("wifi-state");
+    if (!s.available) { st.className = "v bad"; st.textContent = "NO WI-FI ADAPTER"; }
+    else if (!s.radio) { st.className = "v bad"; st.textContent = "RADIO OFF"; }
+    else if (s.state === "connected") { st.className = "v ok"; st.textContent = "CONNECTED"; }
+    else if (s.state === "connecting") { st.className = "v"; st.textContent = "CONNECTING…"; }
+    else { st.className = "v bad"; st.textContent = "NOT CONNECTED"; }
+    $("wifi-ssid").textContent = s.ssid || s.connection || "–";
+    $("wifi-sig").innerHTML = s.state === "connected"
+      ? sigBars(s.signal || 0) + (s.signal != null ? s.signal + "%  " : "") + esc(s.ip || "")
+      : "–";
+    $("wifi-url").textContent = d.setup_url || "no network address yet";
+    if (d.setup_url !== lastQrUrl) {
+      lastQrUrl = d.setup_url;
+      $("wifi-qr").innerHTML = d.setup_url
+        ? '<img alt="" src="/api/wifi/qr.svg?u=' + encodeURIComponent(d.setup_url) + '">'
+        : '<div class="none">Connect a network cable or the USB link to get an address.</div>';
+    }
+  }
+
+  function loadWifi() {
+    fetch("/api/wifi", { cache: "no-store" })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (d.ok) renderWifi(d);
+        else { $("wifi-state").className = "v bad"; $("wifi-state").textContent = d.error; }
+      })
+      .catch(function () {});
+  }
+
+  $("wifi-btn").addEventListener("click", function () {
+    $("wifi-panel").className = "wifi-panel show";
+    loadWifi();
+    clearInterval(wifiTimer);
+    wifiTimer = setInterval(loadWifi, 5000);
+  });
+  $("wifi-close").addEventListener("click", function () {
+    $("wifi-panel").className = "wifi-panel";
+    clearInterval(wifiTimer);
+  });
+
   $("iface-btn").addEventListener("click", function () {
     post("/api/interface/next");
   });

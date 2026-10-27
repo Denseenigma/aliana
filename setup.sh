@@ -50,6 +50,23 @@ Section "InputClass"
 EndSection
 EOF
 
+echo "==> Allowing Aliana to manage Wi-Fi (NetworkManager polkit rule)..."
+# The aliana service runs as a normal user (User= in aliana.service). This
+# rule lets that one user -- and only for NetworkManager actions -- scan,
+# join and forget Wi-Fi networks from the dashboard without sudo.
+ALIANA_USER="$(grep -oP '^User=\K.*' "$REPO_DIR/aliana.service" || id -un)"
+sudo mkdir -p /etc/polkit-1/rules.d
+sudo tee /etc/polkit-1/rules.d/50-aliana-networkmanager.rules > /dev/null <<EOF
+// Installed by Aliana's setup.sh: lets the aliana service manage Wi-Fi
+polkit.addRule(function(action, subject) {
+    if (action.id.indexOf("org.freedesktop.NetworkManager.") == 0 &&
+        subject.user == "$ALIANA_USER") {
+        return polkit.Result.YES;
+    }
+});
+EOF
+sudo systemctl restart polkit 2>/dev/null || true
+
 echo "==> Installing/updating systemd service..."
 sudo cp "$REPO_DIR/aliana.service" /etc/systemd/system/aliana.service
 sudo systemctl daemon-reload

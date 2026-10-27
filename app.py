@@ -5,9 +5,13 @@ shows the results in a web UI, with history.
 """
 import threading
 import time
-from flask import Flask, render_template, jsonify, redirect, url_for
+from flask import Flask, render_template, jsonify, redirect, url_for, request, Response
 
 import scanner
+import wifi
+import qr
+
+PORT = 8080
 
 app = Flask(__name__)
 
@@ -32,7 +36,6 @@ def scan_now():
 
 @app.route("/interface/set", methods=["POST"])
 def set_interface():
-    from flask import request
     name = request.form.get("interface")
     if name:
         scanner.set_current_interface(name)
@@ -90,6 +93,77 @@ def api_interface_next():
     return jsonify(_kiosk_state())
 
 
+# ---------------------------------------------------------------- Wi-Fi
+
+def _setup_url():
+    """Address of the Wi-Fi page that a phone is most likely to reach:
+    the Pi's Wi-Fi IP first, then wired, then the USB gadget link."""
+    by_name = {i["name"]: i for i in scanner.list_interfaces() if i["ipv4"]}
+    order = sorted(by_name, key=lambda n: (
+        0 if n.startswith("wl") else 1 if n.startswith(("eth", "en")) else 3 if n.startswith("usb") else 2))
+    if not order:
+        return None
+    ip = by_name[order[0]]["ipv4"].split("/")[0]
+    return f"http://{ip}:{PORT}/wifi"
+
+
+def _wifi_error(e):
+    return jsonify({"ok": False, "error": str(e)}), 400
+
+
+@app.route("/wifi")
+def wifi_page():
+    return render_template("wifi.html")
+
+
+@app.route("/api/wifi")
+def api_wifi():
+    try:
+        return jsonify({"ok": True, "status": wifi.status(), "saved": wifi.saved(), "setup_url": _setup_url()})
+    except wifi.WifiError as e:
+        return _wifi_error(e)
+
+
+@app.route("/api/wifi/scan")
+def api_wifi_scan():
+    try:
+        return jsonify({"ok": True, "networks": wifi.scan()})
+    except wifi.WifiError as e:
+        return _wifi_error(e)
+
+
+@app.route("/api/wifi/connect", methods=["POST"])
+def api_wifi_connect():
+    data = request.get_json(silent=True) or {}
+    ssid = (data.get("ssid") or "").strip()
+    if not ssid:
+        return _wifi_error("Network name is required.")
+    try:
+        return jsonify({"ok": True, "status": wifi.connect(ssid, data.get("password") or None)})
+    except wifi.WifiError as e:
+        return _wifi_error(e)
+
+
+@app.route("/api/wifi/forget", methods=["POST"])
+def api_wifi_forget():
+    name = ((request.get_json(silent=True) or {}).get("name") or "").strip()
+    if not name:
+        return _wifi_error("Connection name is required.")
+    try:
+        wifi.forget(name)
+        return jsonify({"ok": True})
+    except wifi.WifiError as e:
+        return _wifi_error(e)
+
+
+@app.route("/api/wifi/qr.svg")
+def api_wifi_qr():
+    url = _setup_url()
+    if not url:
+        return Response(status=404)
+    return Response(qr.svg(url), mimetype="image/svg+xml", headers={"Cache-Control": "no-store"})
+
+
 @app.route("/api/interfaces")
 def api_interfaces():
     return jsonify(scanner.list_interfaces())
@@ -115,4 +189,4 @@ if __name__ == "__main__":
     # Kick off the periodic background scanner
     t = threading.Thread(target=scanner.background_loop, daemon=True)
     t.start()
-    app.run(host="0.0.0.0", port=8080)
+    app.run(host="0.0.0.0", port=PORT)

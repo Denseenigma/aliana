@@ -231,6 +231,17 @@
   .state-open { color: var(--green); }
   .history-row { border-bottom-color: var(--border); }
   .error-banner { border-radius: 0; background: #1a0000; }
+  .nav { display: flex; gap: 4px; margin-left: auto; }
+  .nav a {
+    color: var(--accent);
+    text-decoration: none;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    font-size: 0.8rem;
+    padding: 6px 12px;
+    border: 1px solid var(--border);
+  }
+  .nav a.on { background: var(--accent); color: #000; border-color: var(--accent); }
 </style>
 </head>
 <body>
@@ -247,6 +258,7 @@
     </svg>
     Aliana <span>network recon</span>
   </h1>
+  <nav class="nav"><a href="/" class="on">Dashboard</a><a href="/wifi">Wi-Fi</a></nav>
   <div class="status-bar">
     <span>
       <span class="dot {{ 'running' if status.running else 'idle' }}"></span>
