@@ -60,7 +60,10 @@ _stop_requested = threading.Event()
 
 class ScanStopped(Exception):
     pass
-_last_scan_status = {"running": False, "last_run": None, "last_error": None, "next_run": None}
+_last_scan_status = {"running": False, "last_run": None, "last_error": None, "next_run": None,
+                     # how the most recent scan ended ("complete" / "stopped" / "failed"),
+                     # and a counter that bumps every time one ends (kiosk "stamps")
+                     "last_outcome": None, "outcome_seq": 0}
 
 # Live info about the scan in progress, filled in from nmap's verbose output
 # as it runs, so the kiosk screen can show what's happening mid-scan.
@@ -380,6 +383,7 @@ def run_scan(subnet=None, profile=None):
             subnet = get_local_subnet(get_current_interface())
         if not subnet:
             _last_scan_status["last_error"] = "No subnet detected to scan."
+            _last_scan_status["last_outcome"] = "failed"
             return None
         profile = profile if profile in PROFILES else get_profile()
         _reset_progress(subnet)
@@ -409,17 +413,21 @@ def run_scan(subnet=None, profile=None):
 
         _last_scan_status["last_run"] = finished
         _last_scan_status["last_error"] = None
+        _last_scan_status["last_outcome"] = "complete"
         return scan_id
 
     except ScanStopped:
         # Stopped by the user: nothing to save, and not an error
         _last_scan_status["last_error"] = None
+        _last_scan_status["last_outcome"] = "stopped"
         return None
     except subprocess.TimeoutExpired:
         _last_scan_status["last_error"] = f"nmap timed out after {timeout // 60} minutes."
+        _last_scan_status["last_outcome"] = "failed"
         return None
     except Exception as e:
         _last_scan_status["last_error"] = str(e)
+        _last_scan_status["last_outcome"] = "failed"
         return None
     finally:
         # Always clean up the temp file, win or lose, so nothing stale is
@@ -429,6 +437,7 @@ def run_scan(subnet=None, profile=None):
                 os.remove(xml_path)
         except Exception:
             pass
+        _last_scan_status["outcome_seq"] += 1
         _last_scan_status["running"] = False
         _scan_lock.release()
 

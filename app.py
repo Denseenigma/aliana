@@ -3,6 +3,8 @@ app.py - Aliana-lite: a small recon dashboard.
 Runs nmap scans against a subnet (by default, whatever's on usb0) and
 shows the results in a web UI, with history.
 """
+import socket
+import subprocess
 import threading
 import time
 from flask import Flask, render_template, jsonify, redirect, url_for, request, Response
@@ -63,6 +65,21 @@ def kiosk():
     return render_template("kiosk.html")
 
 
+_nmap_version = None
+
+
+def _get_nmap_version():
+    """nmap's version string, read once (shown in the kiosk boot sequence)."""
+    global _nmap_version
+    if _nmap_version is None:
+        try:
+            out = subprocess.run(["nmap", "--version"], capture_output=True, text=True, timeout=10).stdout
+            _nmap_version = out.split("version", 1)[1].split()[0] if "version" in out else "unknown"
+        except Exception:
+            _nmap_version = "not found"
+    return _nmap_version
+
+
 def _scannable(interfaces, current):
     """Interfaces worth cycling through: ones with an IPv4 address (a
     subnet to scan), plus the current one so it's always in the list."""
@@ -79,6 +96,10 @@ def _kiosk_state():
         next_in = max(0, int(status["next_run"] - time.time()))
     return {
         "running": status["running"],
+        "outcome": status.get("last_outcome"),
+        "outcome_seq": status.get("outcome_seq", 0),
+        "hostname": socket.gethostname(),
+        "nmap_version": _get_nmap_version(),
         "profile": status["profile"],
         "profile_label": scanner.PROFILES[status["profile"]]["label"],
         "profiles": [{"key": k, "label": p["label"], "short": p["short"]}

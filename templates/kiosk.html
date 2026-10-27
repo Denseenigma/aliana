@@ -431,6 +431,175 @@
   }
   #scan-btn.busy { background: var(--red); color: #000; opacity: 1; animation: pulse 1.6s ease-in-out infinite; }
   @keyframes pulse { 50% { opacity: 0.6; } }
+
+  /* ================= Eva-style effects ================= */
+
+  /* Soft glow on the big orange/red type */
+  .brand, .phase, .tile .num, #scan-btn, .wifi-title, .pick-name {
+    text-shadow: 0 0 6px rgba(255, 122, 0, 0.35);
+  }
+
+  /* --- CRT: scanlines + vignette + a rare flicker (above everything) --- */
+  #crt {
+    position: fixed;
+    inset: 0;
+    z-index: 50;
+    pointer-events: none;
+    background:
+      repeating-linear-gradient(to bottom, rgba(0, 0, 0, 0) 0 2px, rgba(0, 0, 0, 0.22) 2px 3px),
+      radial-gradient(ellipse at center, rgba(0, 0, 0, 0) 62%, rgba(0, 0, 0, 0.5) 100%);
+    animation: crt-flicker 7s steps(1) infinite;
+  }
+  @keyframes crt-flicker {
+    0%, 100% { opacity: 1; }
+    61% { opacity: 0.55; }
+    62% { opacity: 1; }
+    63% { opacity: 0.7; }
+    64% { opacity: 1; }
+  }
+
+  /* --- Waveform strip in the status band --- */
+  #wave {
+    display: block;
+    width: 100%;
+    height: 14px;
+    margin-top: 4px;
+  }
+
+  /* --- Big 7-segment timer (idle, replaces Top Services) --- */
+  .feed { position: relative; }
+  .timer {
+    position: absolute;
+    inset: 0;
+    display: none;
+    align-items: center;
+    gap: 12px;
+    padding: 4px 10px 4px 12px;
+  }
+  .timer.show { display: flex; }
+  .timer-label {
+    font-family: var(--cond);
+    font-size: 11px;
+    letter-spacing: 0.14em;
+    line-height: 15px;
+    color: var(--muted);
+    white-space: nowrap;
+  }
+  .timer-label b {
+    display: block;
+    font-family: var(--title);
+    font-weight: normal;
+    font-size: 22px;
+    line-height: 24px;
+    letter-spacing: 0.03em;
+    color: var(--orange);
+    text-shadow: 0 0 6px rgba(255, 122, 0, 0.35);
+  }
+  .timer-label .ptag { margin: 4px 0 0; vertical-align: 0; }
+  #seg { flex: 1; height: 100%; max-height: 74px; min-width: 0; }
+  #seg polygon, #seg rect { fill: rgba(255, 122, 0, 0.07); }
+  #seg .on { fill: var(--orange); }
+  #seg.urgent .on { fill: var(--red); }
+  #seg.blink .on { animation: blink 0.5s steps(1) infinite; }
+  #seg.standby .on { fill: var(--line-dim); }
+
+  /* --- Result stamps --- */
+  .stamp {
+    position: fixed;
+    left: 50%;
+    top: 52%;
+    z-index: 30;
+    pointer-events: none;
+    display: none;
+    flex-direction: column;
+    align-items: center;
+    padding: 6px 22px 8px;
+    border: 4px double currentColor;
+    background: rgba(0, 0, 0, 0.82);
+    color: var(--green);
+    transform: translate(-50%, -50%) rotate(-8deg);
+  }
+  .stamp.show { display: flex; animation: stamp-in 0.32s cubic-bezier(.2, 1.6, .4, 1) both; }
+  .stamp.hide { display: flex; animation: stamp-out 0.5s ease-in both; }
+  .stamp.stopped, .stamp.failed { color: var(--red); }
+  .stamp-main {
+    font-family: var(--title);
+    font-size: 58px;
+    line-height: 58px;
+    letter-spacing: 0.06em;
+    text-shadow: 0 0 10px currentColor;
+  }
+  .stamp-sub { font-family: var(--cond); font-size: 13px; letter-spacing: 0.14em; color: var(--text); }
+  @keyframes stamp-in {
+    from { opacity: 0; transform: translate(-50%, -50%) rotate(-8deg) scale(2.2); }
+    to   { opacity: 1; transform: translate(-50%, -50%) rotate(-8deg) scale(1); }
+  }
+  @keyframes stamp-out {
+    from { opacity: 1; }
+    to   { opacity: 0; transform: translate(-50%, -50%) rotate(-8deg) scale(0.92); }
+  }
+
+  /* --- Boot sequence --- */
+  .boot {
+    position: fixed;
+    inset: 0;
+    z-index: 40;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    padding: calc(14px + var(--inset-top)) calc(22px + var(--inset-right))
+             calc(14px + var(--inset-bottom)) calc(22px + var(--inset-left));
+    background: #000;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='28' height='48' viewBox='0 0 28 48'%3E%3Cpath d='M14 0 L28 8 L28 24 L14 32 L0 24 L0 8 Z M14 32 L14 48' fill='none' stroke='%23ff7a00' stroke-opacity='0.09'/%3E%3C/svg%3E");
+  }
+  .boot.done { animation: boot-out 0.45s ease-in forwards; }
+  @keyframes boot-out {
+    0% { opacity: 1; background-color: #000; }
+    25% { opacity: 1; background-color: #ff7a00; }
+    100% { opacity: 0; visibility: hidden; }
+  }
+  .boot-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 8px; }
+  .boot-title {
+    font-family: var(--title);
+    font-size: 40px;
+    line-height: 40px;
+    color: var(--orange);
+    letter-spacing: 0.04em;
+    text-shadow: 0 0 8px rgba(255, 122, 0, 0.5);
+  }
+  .boot-sub { font-family: var(--cond); font-size: 11px; letter-spacing: 0.2em; color: var(--muted); }
+  .boot-rule {
+    height: 6px;
+    margin-bottom: 10px;
+    background: repeating-linear-gradient(-45deg, var(--orange) 0 5px, #000 5px 10px);
+    opacity: 0.8;
+  }
+  .boot-line {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+    font-family: var(--cond);
+    font-size: 14px;
+    line-height: 21px;
+    letter-spacing: 0.08em;
+    color: var(--text);
+    animation: line-in 0.12s steps(2) both;
+  }
+  .boot-line .dots { flex: 1; border-bottom: 2px dotted var(--line-dim); margin-bottom: 5px; }
+  .boot-line .val { color: var(--green); }
+  .boot-line .val.bad { color: var(--red); }
+  @keyframes line-in { from { opacity: 0; transform: translateX(-6px); } to { opacity: 1; transform: none; } }
+  .boot-online {
+    margin-top: 10px;
+    font-family: var(--title);
+    font-size: 34px;
+    line-height: 36px;
+    letter-spacing: 0.06em;
+    color: var(--green);
+    text-shadow: 0 0 10px rgba(80, 255, 80, 0.6);
+    visibility: hidden;
+  }
+  .boot-online.show { visibility: visible; animation: blink 0.25s steps(1) 3; }
 </style>
 </head>
 <body>
@@ -458,6 +627,7 @@
     <span class="status-right" id="status-right"></span>
   </div>
   <div class="bar"><div class="bar-fill" id="bar"></div></div>
+  <canvas id="wave" height="14"></canvas>
 </section>
 
 <section class="tiles">
@@ -466,13 +636,30 @@
   <div class="tile"><div class="tile-inner"><div class="label" id="third-label">Last scan</div><div class="num small" id="third">&ndash;</div></div></div>
 </section>
 
-<section class="feed" id="feed"><div class="muted">Waiting for data&hellip;</div></section>
+<section class="feed" id="feed">
+  <div id="feed-list"><div class="muted">Waiting for data&hellip;</div></div>
+  <div class="timer" id="timer">
+    <div class="timer-label"><span id="timer-what">Next scan</span><b id="timer-prof">&ndash;</b></div>
+    <svg id="seg" preserveAspectRatio="xMidYMid meet" aria-label="countdown"></svg>
+  </div>
+</section>
 
 <section class="controls">
   <button id="scan-btn" type="button">SCAN NOW</button>
   <button id="iface-btn" class="secondary" type="button">IFACE &#x21bb;</button>
   <button id="wifi-btn" class="secondary" type="button">WI-FI</button>
 </section>
+
+<div class="stamp" id="stamp"><div class="stamp-main" id="stamp-main"></div><div class="stamp-sub" id="stamp-sub"></div></div>
+
+<div class="boot" id="boot">
+  <div class="boot-head"><div class="boot-title">ALIANA</div><div class="boot-sub">NETWORK RECON SYSTEM &middot; BOOT</div></div>
+  <div class="boot-rule"></div>
+  <div id="boot-lines"></div>
+  <div class="boot-online" id="boot-online">SYSTEM ONLINE</div>
+</div>
+
+<div id="crt"></div>
 
 <section class="picker" id="picker">
   <div class="wifi-head">
@@ -597,7 +784,7 @@
     $("tile-ports").className = "tile" + (s.running ? " live" : "");
 
     // Feed
-    var feed = $("feed"), html = "";
+    var feed = $("feed-list"), html = "";
     if (s.running && p) {
       html = '<div class="feed-title">Live — ' + esc(s.profile_label) + " — " + esc(p.subnet) + "</div>";
       if (!p.recent.length) {
@@ -654,11 +841,19 @@
     $("ptag").style.display = "";
     $("ptag").className = "ptag " + prof;
     $("ptag").textContent = String(label).toUpperCase();
+    // Big timer label: which profile the next automatic scan will use
+    $("timer-prof").textContent = String(s.profile_label || "").toUpperCase();
+    $("timer-prof").style.color = s.profile === "discovery" ? "var(--cyan)" : s.profile === "deep" ? "var(--red)" : "";
   }
 
   function apply(data) {
+    maybeStamp(data);
+    waveKick(data);
     state = data;
+    syncTimerTarget();
     render();
+    updateTimer();
+    runBoot();
   }
 
   function poll() {
@@ -815,6 +1010,203 @@
     post("/api/interface/next");
   });
 
+
+  // ================= Eva-style effects =================
+
+  // ---- Big 7-segment timer ----
+  // Segment shapes for one digit in a 20x36 box; skewed slightly like an LCD.
+  var SEGS = {
+    a: "2.5,0.6 17.5,0.6 14.6,3.6 5.4,3.6",
+    b: "19,2 19,15.5 17.5,17 16,15.3 16,5",
+    c: "19,20.5 19,34 16,31 16,20.7 17.5,19",
+    d: "5.4,32.4 14.6,32.4 17.5,35.4 2.5,35.4",
+    e: "1,20.5 2.5,19 4,20.7 4,31 1,34",
+    f: "1,2 4,5 4,15.3 2.5,17 1,15.5",
+    g: "4,18 6,16.3 14,16.3 16,18 14,19.7 6,19.7"
+  };
+  var DIGITS = {
+    "0": "abcdef", "1": "bc", "2": "abdeg", "3": "abcdg", "4": "bcfg", "5": "acdfg",
+    "6": "acdefg", "7": "abc", "8": "abcdefg", "9": "abcdfg", "-": "g", " ": ""
+  };
+  var segCells = [];   // per character: {type, parts}
+  var SEG_PATTERN = "88:88:88";
+
+  function buildSeg() {
+    var svg = $("seg"), x = 0, ns = "http://www.w3.org/2000/svg";
+    var g = document.createElementNS(ns, "g");
+    g.setAttribute("transform", "skewX(-6) translate(4 0)");
+    SEG_PATTERN.split("").forEach(function (ch) {
+      var cell = { colon: ch === ":", parts: {} };
+      if (cell.colon) {
+        [11, 23].forEach(function (y) {
+          var r = document.createElementNS(ns, "rect");
+          r.setAttribute("x", x + 1); r.setAttribute("y", y); r.setAttribute("width", 3.4); r.setAttribute("height", 3.4);
+          g.appendChild(r); cell.parts[y] = r;
+        });
+        x += 8;
+      } else {
+        Object.keys(SEGS).forEach(function (k) {
+          var p = document.createElementNS(ns, "polygon");
+          p.setAttribute("points", SEGS[k]);
+          p.setAttribute("transform", "translate(" + x + " 0)");
+          g.appendChild(p); cell.parts[k] = p;
+        });
+        x += 24;
+      }
+      segCells.push(cell);
+    });
+    svg.setAttribute("viewBox", "0 0 " + (x + 2) + " 36");
+    svg.appendChild(g);
+  }
+
+  function setSeg(text) {   // text like "04:59:99" (colons fixed)
+    var chars = text.replace(/:/g, "").split(""), i = 0;
+    segCells.forEach(function (cell) {
+      if (cell.colon) {
+        Object.keys(cell.parts).forEach(function (k) { cell.parts[k].setAttribute("class", "on"); });
+        return;
+      }
+      var lit = DIGITS[chars[i++]] || "";
+      Object.keys(cell.parts).forEach(function (k) {
+        cell.parts[k].setAttribute("class", lit.indexOf(k) >= 0 ? "on" : "");
+      });
+    });
+  }
+
+  var nextTarget = null;     // ms timestamp of the next automatic scan
+  function syncTimerTarget() {
+    nextTarget = (state && !state.running && state.next_in != null) ? Date.now() + state.next_in * 1000 : null;
+  }
+
+  function updateTimer() {
+    var show = state && !state.running && !state.error;
+    $("timer").className = "timer" + (show ? " show" : "");
+    $("feed-list").style.visibility = show ? "hidden" : "";
+    if (!show) return;
+    var seg = $("seg");
+    if (nextTarget === null) {
+      setSeg("--:--:--");
+      seg.setAttribute("class", "standby");
+      $("timer-what").textContent = "Standby";
+      return;
+    }
+    $("timer-what").textContent = "Next scan";
+    var ms = Math.max(0, nextTarget - Date.now());
+    var m = Math.floor(ms / 60000), s = Math.floor(ms / 1000) % 60, cs = Math.floor(ms / 10) % 100;
+    if (m > 99) m = 99;
+    var pad = function (n) { return (n < 10 ? "0" : "") + n; };
+    setSeg(pad(m) + ":" + pad(s) + ":" + pad(cs));
+    seg.setAttribute("class", ms === 0 ? "urgent blink" : ms < 10000 ? "urgent" : "");
+  }
+
+  // ---- Waveform strip ----
+  var wave = $("wave"), wctx = wave.getContext("2d");
+  var samples = [], energy = 0, phaseT = 0, lastCounts = null;
+
+  function waveKick(data) {   // spikes when new hosts / ports turn up
+    var p = data.running && data.progress;
+    if (!p) { lastCounts = null; return; }
+    if (lastCounts) {
+      var dPorts = Math.max(0, p.open_ports - lastCounts.ports);
+      var dHosts = Math.max(0, p.hosts_up - lastCounts.hosts);
+      energy = Math.min(1.4, energy + dPorts * 0.45 + dHosts * 0.2);
+    }
+    lastCounts = { ports: p.open_ports, hosts: p.hosts_up };
+  }
+
+  function drawWave() {
+    var w = wave.width, h = wave.height, mid = h / 2;
+    var running = state && state.running;
+    phaseT += 0.35;
+    energy *= 0.93;
+    var v = running
+      ? Math.sin(phaseT) * 0.18 + Math.sin(phaseT * 2.7) * 0.08 + (Math.random() - 0.5) * (0.25 + energy * 1.6)
+      : (Math.random() - 0.5) * 0.04;
+    samples.push(Math.max(-1, Math.min(1, v)));
+    var step = 3, max = Math.ceil(w / step) + 1;
+    while (samples.length > max) samples.shift();
+    wctx.clearRect(0, 0, w, h);
+    wctx.fillStyle = "rgba(255,122,0,0.10)";            // grid ticks
+    for (var gx = w - ((phaseT * 4) % 24); gx > 0; gx -= 24) wctx.fillRect(Math.round(gx), 0, 1, h);
+    wctx.fillRect(0, Math.round(mid), w, 1);
+    wctx.strokeStyle = running ? "#50ff50" : "rgba(255,122,0,0.55)";
+    wctx.lineWidth = 1.5;
+    wctx.beginPath();
+    for (var i = 0; i < samples.length; i++) {
+      var x = w - (samples.length - 1 - i) * step, y = mid - samples[i] * (mid - 1);
+      if (i === 0) wctx.moveTo(x, y); else wctx.lineTo(x, y);
+    }
+    wctx.stroke();
+  }
+
+  function sizeWave() { wave.width = Math.max(50, wave.clientWidth); wave.height = 14; }
+
+  // ---- Result stamps ----
+  var lastSeq = null, stampTimer = null;
+  function maybeStamp(data) {
+    if (lastSeq === null) { lastSeq = data.outcome_seq; return; }   // no stamp on page load
+    if (data.outcome_seq === lastSeq) return;
+    lastSeq = data.outcome_seq;
+    var o = data.outcome || "complete", st = $("stamp"), sub = "";
+    if (o === "complete" && data.latest) {
+      sub = data.latest.hosts + " HOSTS · " + data.latest.open_ports + " OPEN PORTS";
+    } else if (o === "stopped") {
+      sub = "SCAN STOPPED BY OPERATOR";
+    } else if (o === "failed") {
+      sub = "SEE ERROR BELOW";
+    }
+    $("stamp-main").textContent = { complete: "COMPLETE", stopped: "ABORTED", failed: "FAILED" }[o] || "COMPLETE";
+    $("stamp-sub").textContent = sub;
+    clearTimeout(stampTimer);
+    st.className = "stamp " + o;
+    void st.offsetWidth;                 // restart the animation
+    st.className = "stamp show " + o;
+    stampTimer = setTimeout(function () {
+      st.className = "stamp hide " + o;
+      stampTimer = setTimeout(function () { st.className = "stamp"; }, 500);
+    }, 3200);
+  }
+
+  // ---- Boot sequence ----
+  var booted = false;
+  function runBoot() {
+    if (booted) return;
+    booted = true;
+    var s = state || {};
+    var ip = s.interface_ip ? s.interface_ip.split("/")[0] : null;
+    var lines = [
+      ["NODE", (s.hostname || "unknown").toUpperCase(), true],
+      ["NETWORK LINK", (s.interface || "?").toUpperCase() + (ip ? "  " + ip : "  NO ADDRESS"), !!ip],
+      ["SCAN ENGINE", s.nmap_version && s.nmap_version !== "not found" ? "NMAP " + s.nmap_version : "NMAP NOT FOUND",
+        !!(s.nmap_version && s.nmap_version !== "not found")],
+      ["SCAN PROFILE", (s.profile_label || "?").toUpperCase(), true],
+      ["AUTO-SCAN", s.next_in != null ? "IN " + dur(s.next_in) : "STANDBY", true],
+      ["DISPLAY", window.innerWidth + "×" + window.innerHeight + "  OK", true]
+    ];
+    var box = $("boot-lines"), i = 0;
+    var timer = setInterval(function () {
+      if (i >= lines.length) {
+        clearInterval(timer);
+        $("boot-online").className = "boot-online show";
+        setTimeout(finishBoot, 900);
+        return;
+      }
+      var l = lines[i++];
+      var row = document.createElement("div");
+      row.className = "boot-line";
+      row.innerHTML = "<span>" + esc(l[0]) + '</span><span class="dots"></span><span class="val' +
+        (l[2] ? "" : " bad") + '">' + esc(l[1]) + "</span>";
+      box.appendChild(row);
+    }, 230);
+    $("boot").addEventListener("click", function () { clearInterval(timer); finishBoot(); });
+  }
+  function finishBoot() {
+    var b = $("boot");
+    if (b.className.indexOf("done") >= 0) return;
+    b.className = "boot done";
+    setTimeout(function () { b.style.display = "none"; }, 500);
+  }
+
   // Clock + local countdown between polls
   function tick() {
     var d = new Date();
@@ -828,6 +1220,12 @@
     }
   }
   tickTimer = setInterval(tick, 1000);
+  buildSeg();
+  sizeWave();
+  window.addEventListener("resize", sizeWave);
+  setInterval(drawWave, 70);
+  setInterval(updateTimer, 50);
+  setTimeout(runBoot, 1500);   // boot even if the first poll is slow
   tick();
   poll();
 })();
