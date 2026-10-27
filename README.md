@@ -100,11 +100,33 @@ used only before anything's been selected in the UI:
 
 - `ALIANA_IFACE` — initial interface to scan (default `usb0`)
 - `ALIANA_SCAN_INTERVAL` — seconds between automatic scans (default `300`)
+- `ALIANA_AUTO_SCAN` — `1` to start with automatic scans on (default `0`, off)
+- `ALIANA_NMAP_PRIVILEGED` — `0` to never use raw sockets (default `1`)
+
+## Auto-scan
+
+Automatic scans are **off by default** -- nothing touches the network until
+you press Scan now or switch auto-scan on. Turn it on (and pick 5 / 15 / 30 /
+60 min) from the dashboard's "Auto-scan" dropdown or the Pi screen's AUTO
+button. The setting is saved, so it survives restarts. The first automatic
+scan runs a minute after switching on (or after boot); after that, the
+interval is counted from the end of the last scan -- a manual scan resets
+the countdown too. Automatic scans use the selected profile.
+
+## Scan mode (SYN vs connect)
+
+`setup.sh` gives nmap the `cap_net_raw` capability, so Aliana runs it with
+`--privileged`: ARP host discovery (MAC + vendor), half-open SYN port scans,
+and on the **Deep** profile, OS fingerprinting (`-O --osscan-limit
+--max-os-tries 1`), shown on each host card with nmap's confidence. If the
+capability is missing (e.g. nmap was upgraded -- re-run `setup.sh`), Aliana
+falls back to TCP connect scans without OS detection and says so on the
+dashboard ("Mode: Connect") and in the Pi screen's boot sequence.
 
 ## What it does
 
-- Every `ALIANA_SCAN_INTERVAL` seconds, runs `nmap -sV -T4 --top-ports 100`
-  against the subnet detected on the selected interface
+- Runs nmap (see Scan profiles) against the subnet detected on the
+  selected interface, on demand or on the auto-scan interval
 - Parses results (hosts, MAC/vendor, open ports, service/version) into
   SQLite
 - Serves a dashboard at `/` showing the latest scan plus recent history
@@ -118,8 +140,8 @@ If a screen is attached and you want Aliana to boot straight into it in
 kiosk mode, `setup.sh` already wires this up. Chromium opens straight to
 `/kiosk` once Aliana's Flask server is answering: a single, no-scroll
 screen showing the scan in progress live (phase, % done, hosts up, open
-ports as they're found), a summary of the last scan when idle, and two
-buttons -- Scan now, and cycle the scan interface. The full detail stays
+ports as they're found), a summary of the last scan when idle, and
+buttons for Scan now, cycling the scan interface, auto-scan, and Wi-Fi. The full detail stays
 on the browser dashboard at `/`.
 
 ## Scan profiles

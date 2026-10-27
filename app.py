@@ -58,6 +58,7 @@ def index():
     return render_template(
         "index.html", scan=latest, status=status, history=history, interfaces=interfaces,
         profiles=scanner.PROFILES,
+        intervals=[(sec, _interval_label(sec)) for sec in scanner.INTERVAL_CHOICES],
         own_ips={i["ipv4"].split("/")[0] for i in interfaces if i["ipv4"]},
     )
 
@@ -75,6 +76,31 @@ def set_profile():
     if name in scanner.PROFILES and not scanner.get_status()["running"]:
         scanner.set_profile(name)
     return redirect(url_for("index"))
+
+
+@app.route("/autoscan/set", methods=["POST"])
+def set_autoscan():
+    """Dashboard auto-scan select: "off" or an interval in seconds."""
+    _apply_autoscan(request.form.get("autoscan"))
+    return redirect(url_for("index"))
+
+
+def _apply_autoscan(value):
+    """'off' / 0 switches auto-scan off (the interval is kept); an interval
+    in seconds switches it on at that interval."""
+    if value in (None, ""):
+        return
+    if str(value).lower() in ("off", "0", "false"):
+        scanner.set_auto_scan(enabled=False)
+        return
+    try:
+        scanner.set_auto_scan(enabled=True, interval=int(value))
+    except ValueError:
+        pass
+
+
+def _interval_label(sec):
+    return f"{sec // 3600} h" if sec % 3600 == 0 else f"{sec // 60} min"
 
 
 @app.route("/scan/stop", methods=["POST"])
@@ -141,7 +167,12 @@ def _kiosk_state():
         "interface_ip": iface_ip,
         "interfaces": _scannable(interfaces, current),
         "next_in": next_in,
-        "interval": status.get("next_total") or scanner.SCAN_INTERVAL_SECONDS,
+        "interval": status.get("next_total") or status["scan_interval"],
+        "auto_scan": status["auto_scan"],
+        "scan_interval": status["scan_interval"],
+        "intervals": [{"seconds": sec, "label": _interval_label(sec)} for sec in scanner.INTERVAL_CHOICES],
+        "mode": status["mode"],
+        "notice": status.get("notice"),
         "progress": scanner.get_progress(),
         "latest": scanner.get_latest_summary(),
     }
@@ -172,6 +203,19 @@ def api_profile_next():
         names = list(scanner.PROFILES)
         current = scanner.get_profile()
         scanner.set_profile(names[(names.index(current) + 1) % len(names)])
+    return jsonify(_kiosk_state())
+
+
+@app.route("/api/autoscan", methods=["POST"])
+def api_autoscan():
+    """JSON {"interval": seconds} switches auto-scan on at that interval;
+    {"interval": "off"} (or {"enabled": false}) switches it off."""
+    data = request.get_json(silent=True) or {}
+    if data.get("enabled") is False:
+        _apply_autoscan("off")
+    else:
+        _apply_autoscan(data.get("interval"))
+    time.sleep(0.1)  # let the auto-scan loop publish the new countdown
     return jsonify(_kiosk_state())
 
 

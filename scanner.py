@@ -15,13 +15,22 @@ import traceback
 import re
 import pty
 import select
+import shutil
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "aliana.db")
 SCAN_INTERFACE = os.environ.get("ALIANA_IFACE", "usb0")
 SCAN_INTERVAL_SECONDS = int(os.environ.get("ALIANA_SCAN_INTERVAL", "300"))  # 5 min default
-# Wait this long after startup before the first automatic scan, so the Pi
-# (and its network links) can settle after boot
+# Wait this long after startup (or after auto-scan is switched on) before the
+# first automatic scan, so the Pi and its network links can settle
 FIRST_SCAN_DELAY_SECONDS = int(os.environ.get("ALIANA_FIRST_SCAN_DELAY", "60"))
+# Automatic scans are OFF until switched on from the dashboard or the Pi
+# screen (safer when plugged into a network you don't own). Set
+# ALIANA_AUTO_SCAN=1 to make a fresh install start with them on. Once the
+# setting has been changed in the UI, the saved value wins.
+AUTO_SCAN_DEFAULT = os.environ.get("ALIANA_AUTO_SCAN", "0") == "1"
+# Intervals offered in the UI (seconds). The env default is added if it's
+# not one of them, so a custom ALIANA_SCAN_INTERVAL still shows up.
+INTERVAL_CHOICES = sorted({300, 900, 1800, 3600, SCAN_INTERVAL_SECONDS})
 
 # Run nmap with --privileged, relying on the raw-socket capabilities setup.sh
 # grants it: ARP host discovery on the local subnet (the only way to get MAC
@@ -51,11 +60,16 @@ PROFILES = {
     },
     "deep": {
         "label": "Deep",
-        "description": "Top 1000 TCP ports with full version detection. Much more "
-                       "traffic and probing -- run deliberately, not on fragile/OT networks.",
-        "short": "Top 1000 ports, full version probing",
+        "description": "Top 1000 TCP ports with full version detection and OS "
+                       "fingerprinting. Much more traffic and probing -- run "
+                       "deliberately, not on fragile/OT networks.",
+        "short": "Top 1000 ports, full probing + OS guess",
         "args": ["-sV", "-T3", "--top-ports", "1000",
                  "--max-rate", "300", "--host-timeout", "15m"],
+        # Only used when nmap has raw sockets (OS detection needs them).
+        # --osscan-limit skips hosts without both an open and a closed port
+        # (the guess would be poor anyway); one try keeps the traffic down.
+        "privileged_args": ["-O", "--osscan-limit", "--max-os-tries", "1"],
         "timeout": 3600,
     },
 }
@@ -63,6 +77,10 @@ DEFAULT_PROFILE = "standard"
 
 _scan_lock = threading.Lock()
 _stop_requested = threading.Event()
+# Wakes the auto-scan loop when its settings change or a scan finishes, so
+# the countdown is recomputed straight away
+_schedule_changed = threading.Event()
+_last_scan_end = None  # time.monotonic() when the last scan (any kind) ended
 
 
 class ScanStopped(Exception):
@@ -70,7 +88,9 @@ class ScanStopped(Exception):
 _last_scan_status = {"running": False, "last_run": None, "last_error": None, "next_run": None,
                      # how the most recent scan ended ("complete" / "stopped" / "failed"),
                      # and a counter that bumps every time one ends (kiosk "stamps")
-                     "last_outcome": None, "outcome_seq": 0}
+                     "last_outcome": None, "outcome_seq": 0,
+                     # non-fatal note about the last scan (e.g. ran unprivileged)
+                     "notice": None}
 
 # Live info about the scan in progress, filled in from nmap's verbose output
 # as it runs, so the kiosk screen can show what's happening mid-scan.
@@ -262,6 +282,13 @@ def init_db():
     cols = [r[1] for r in c.execute("PRAGMA table_info(scans)")]
     if "profile" not in cols:
         c.execute("ALTER TABLE scans ADD COLUMN profile TEXT")
+    if "mode" not in cols:  # "syn" (raw sockets) or "connect"
+        c.execute("ALTER TABLE scans ADD COLUMN mode TEXT")
+    # Older databases: OS guess columns (Deep scans with raw sockets)
+    hcols = [r[1] for r in c.execute("PRAGMA table_info(hosts)")]
+    for col, typ in (("os_name", "TEXT"), ("os_accuracy", "INTEGER"), ("os_type", "TEXT")):
+        if col not in hcols:
+            c.execute(f"ALTER TABLE hosts ADD COLUMN {col} {typ}")
     # Clean up "down" hosts stored by earlier builds (nmap -v lists every
     # unresponsive address) and fix those scans' host counts.
     c.execute("DELETE FROM ports WHERE host_id IN (SELECT id FROM hosts WHERE status = 'down')")
@@ -335,6 +362,34 @@ def set_profile(name):
     _set_setting("profile", name)
 
 
+def get_auto_scan():
+    """True when automatic scans are switched on."""
+    v = _get_setting("auto_scan")
+    return AUTO_SCAN_DEFAULT if v is None else v == "1"
+
+
+def get_scan_interval():
+    """Seconds between automatic scans (kept even while auto-scan is off)."""
+    try:
+        v = int(_get_setting("scan_interval", SCAN_INTERVAL_SECONDS))
+    except (TypeError, ValueError):
+        v = SCAN_INTERVAL_SECONDS
+    return v if v in INTERVAL_CHOICES else SCAN_INTERVAL_SECONDS
+
+
+def set_auto_scan(enabled=None, interval=None):
+    """Switches automatic scans on/off and/or changes the interval. The
+    auto-scan loop picks the change up immediately."""
+    if interval is not None:
+        interval = int(interval)
+        if interval not in INTERVAL_CHOICES:
+            raise ValueError(f"Unsupported interval: {interval}")
+        _set_setting("scan_interval", str(interval))
+    if enabled is not None:
+        _set_setting("auto_scan", "1" if enabled else "0")
+    _schedule_changed.set()
+
+
 def get_current_interface():
     """Returns the currently selected scan interface: DB setting if present,
     otherwise falls back to the ALIANA_IFACE env var / 'usb0' default."""
@@ -377,9 +432,57 @@ def get_local_subnet(interface=SCAN_INTERFACE):
     return None
 
 
+_RAW_ERRORS = ("requires root privileges", "Operation not permitted", "raw socket",
+               "Failed to open device", "dnet:", "pcap", "privileged")
+_raw_caps_cache = None
+
+
+def has_raw_sockets():
+    """True when nmap can open raw sockets: running as root, or the nmap
+    binary carries cap_net_raw (setup.sh grants it with setcap). Cached --
+    restart the service after re-running setup.sh."""
+    global _raw_caps_cache
+    if _raw_caps_cache is not None:
+        return _raw_caps_cache
+    ok = os.geteuid() == 0
+    if not ok:
+        nmap = shutil.which("nmap")
+        getcap = shutil.which("getcap") or next(
+            (p for p in ("/usr/sbin/getcap", "/sbin/getcap") if os.path.exists(p)), None)
+        if nmap and getcap:
+            try:
+                out = subprocess.run([getcap, os.path.realpath(nmap)], capture_output=True,
+                                     text=True, timeout=5).stdout
+                ok = "cap_net_raw" in out
+            except Exception:
+                ok = False
+    _raw_caps_cache = ok
+    return ok
+
+
+def scan_mode():
+    """'syn' when scans will use raw sockets (SYN scan, ARP discovery, OS
+    detection on Deep), otherwise 'connect'."""
+    return "syn" if NMAP_PRIVILEGED and has_raw_sockets() else "connect"
+
+
+def _nmap_cmd(profile, subnet, xml_path, privileged):
+    p = PROFILES[profile]
+    cmd = ["nmap"]
+    if privileged:
+        cmd.append("--privileged")
+    cmd += p["args"]
+    if privileged:
+        cmd += p.get("privileged_args", [])
+    # -v and --stats-every make nmap report progress as it goes (hosts
+    # found, ports discovered, % done), which the kiosk screen shows live.
+    return cmd + ["-v", "--stats-every", "2s", "-oX", xml_path, subnet]
+
+
 def run_scan(subnet=None, profile=None):
     """Runs an nmap scan against the subnet using a scan profile (default: the
     saved one) and stores results. Returns scan_id or None."""
+    global _raw_caps_cache, _last_scan_end
     if not _scan_lock.acquire(blocking=False):
         return None  # a scan is already running
 
@@ -395,6 +498,7 @@ def run_scan(subnet=None, profile=None):
         profile = profile if profile in PROFILES else get_profile()
         _reset_progress(subnet)
         _progress["profile"] = profile
+        _progress["mode"] = scan_mode()
 
         started = datetime.datetime.now().isoformat()
         # Unique filename per scan (pid + uuid) so a leftover file from a
@@ -405,21 +509,31 @@ def run_scan(subnet=None, profile=None):
         )
 
         # The profile decides what gets scanned and how hard (see PROFILES).
-        # -v and --stats-every make nmap report progress as it goes (hosts
-        # found, ports discovered, % done), which the kiosk screen shows live.
-        p = PROFILES[profile]
-        cmd = ["nmap"]
-        if NMAP_PRIVILEGED:
-            cmd.append("--privileged")
-        cmd += p["args"] + ["-v", "--stats-every", "2s", "-oX", xml_path, subnet]
-
-        timeout = p["timeout"]
-        _run_nmap_live(cmd, timeout=timeout)
+        # With raw sockets nmap does ARP discovery + SYN scans (and OS
+        # detection on Deep); without, it falls back to TCP connect scans.
+        _last_scan_status["notice"] = None
+        mode = scan_mode()
+        timeout = PROFILES[profile]["timeout"]
+        try:
+            _run_nmap_live(_nmap_cmd(profile, subnet, xml_path, mode == "syn"), timeout=timeout)
+        except RuntimeError as e:
+            if mode != "syn" or not any(k.lower() in str(e).lower() for k in _RAW_ERRORS):
+                raise
+            # Raw sockets refused (capability lost, e.g. nmap was upgraded
+            # and setup.sh not re-run): retry once as a connect scan.
+            _raw_caps_cache = False
+            mode = "connect"
+            _last_scan_status["notice"] = ("Raw sockets unavailable -- ran a connect scan without "
+                                           "OS detection. Re-run setup.sh and restart Aliana.")
+            _reset_progress(subnet)
+            _progress["profile"] = profile
+            _run_nmap_live(_nmap_cmd(profile, subnet, xml_path, False), timeout=timeout)
+        _progress["mode"] = mode
 
         hosts = _parse_nmap_xml(xml_path)
         finished = datetime.datetime.now().isoformat()
 
-        scan_id = _store_results(subnet, started, finished, hosts, profile)
+        scan_id = _store_results(subnet, started, finished, hosts, profile, mode)
 
         _last_scan_status["last_run"] = finished
         _last_scan_status["last_error"] = None
@@ -447,9 +561,11 @@ def run_scan(subnet=None, profile=None):
                 os.remove(xml_path)
         except Exception:
             pass
+        _last_scan_end = time.monotonic()
         _last_scan_status["outcome_seq"] += 1
         _last_scan_status["running"] = False
         _scan_lock.release()
+        _schedule_changed.set()  # the next auto-scan counts from now
 
 
 def _parse_nmap_xml(path):
@@ -493,6 +609,21 @@ def _parse_nmap_xml(path):
                     "version": service_el.get("version") if service_el is not None else "",
                 })
 
+        # OS guess (Deep scans with raw sockets): nmap lists matches best first
+        os_name = os_accuracy = os_type = None
+        os_el = host_el.find("os")
+        if os_el is not None:
+            m = os_el.find("osmatch")
+            if m is not None:
+                os_name = m.get("name")
+                try:
+                    os_accuracy = int(m.get("accuracy"))
+                except (TypeError, ValueError):
+                    pass
+                cls = m.find("osclass")
+                if cls is not None:
+                    os_type = cls.get("type")
+
         # With -v, nmap also lists every address that did NOT respond
         # (status "down") -- skip those, we only want live hosts.
         if addr_ipv4 and status == "up":
@@ -503,24 +634,30 @@ def _parse_nmap_xml(path):
                 "hostname": hostname,
                 "status": status,
                 "ports": ports,
+                "os_name": os_name,
+                "os_accuracy": os_accuracy,
+                "os_type": os_type,
             })
 
     return hosts
 
 
-def _store_results(subnet, started, finished, hosts, profile=None):
+def _store_results(subnet, started, finished, hosts, profile=None, mode=None):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute(
-        "INSERT INTO scans (started_at, finished_at, subnet, host_count, profile) VALUES (?, ?, ?, ?, ?)",
-        (started, finished, subnet, len(hosts), profile),
+        "INSERT INTO scans (started_at, finished_at, subnet, host_count, profile, mode) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        (started, finished, subnet, len(hosts), profile, mode),
     )
     scan_id = c.lastrowid
 
     for h in hosts:
         c.execute(
-            "INSERT INTO hosts (scan_id, ip, mac, vendor, hostname, status) VALUES (?, ?, ?, ?, ?, ?)",
-            (scan_id, h["ip"], h["mac"], h["vendor"], h["hostname"], h["status"]),
+            "INSERT INTO hosts (scan_id, ip, mac, vendor, hostname, status, os_name, os_accuracy, os_type) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (scan_id, h["ip"], h["mac"], h["vendor"], h["hostname"], h["status"],
+             h.get("os_name"), h.get("os_accuracy"), h.get("os_type")),
         )
         host_id = c.lastrowid
         for p in h["ports"]:
@@ -574,6 +711,10 @@ def get_status():
     status = dict(_last_scan_status)
     status["interface"] = get_current_interface()
     status["profile"] = get_profile()
+    status["auto_scan"] = get_auto_scan()
+    status["scan_interval"] = get_scan_interval()
+    status["next_in"] = next_scan_in()
+    status["mode"] = scan_mode()
     return status
 
 
@@ -636,31 +777,45 @@ def get_latest_summary():
 
 
 def background_loop():
-    """Runs forever, scanning on an interval. Call in a daemon thread.
-    Any unexpected error is logged and the loop carries on, so automatic
-    scans can't silently stop."""
+    """Runs forever, starting automatic scans while auto-scan is switched on.
+    Call in a daemon thread. Sleeps until the next scan is due, waking early
+    whenever the settings change or any scan (manual too) finishes, so the
+    countdown always reflects the current settings. Any unexpected error is
+    logged and the loop carries on, so automatic scans can't silently stop."""
     try:
         init_db()
         cleanup_stale_temp_files()
     except Exception:
         traceback.print_exc()
-    _schedule_next(FIRST_SCAN_DELAY_SECONDS)
     while True:
         try:
-            run_scan()
+            _schedule_changed.clear()
+            if not get_auto_scan():
+                _last_scan_status["next_run"] = None
+                _last_scan_status["next_total"] = None
+                _schedule_changed.wait()
+                continue
+            interval = get_scan_interval()
+            now = time.monotonic()
+            # Next scan: one interval after the last scan ended, but never
+            # sooner than the settle delay (boot, or just switched on).
+            # Uses the monotonic clock: the Pi has no battery-backed clock and
+            # its wall time jumps when it syncs after boot.
+            soonest = now + FIRST_SCAN_DELAY_SECONDS
+            if _last_scan_end is not None and _last_scan_end + interval >= soonest:
+                target, since = _last_scan_end + interval, _last_scan_end
+            else:
+                target, since = soonest, now
+            _last_scan_status["next_run"] = target
+            _last_scan_status["next_total"] = int(round(target - since))  # for the kiosk progress bar
+            if _schedule_changed.wait(max(0, target - now)):
+                continue  # settings changed or a scan ended: recompute
+            if get_auto_scan() and not _last_scan_status["running"]:
+                _last_scan_status["next_run"] = None
+                run_scan()
         except Exception:
             traceback.print_exc()
-        _schedule_next(SCAN_INTERVAL_SECONDS)
-
-
-def _schedule_next(seconds):
-    """Sleeps until the next automatic scan, publishing when it will be.
-    Uses the monotonic clock: the Pi has no battery-backed clock and its
-    wall time jumps when it syncs over the network after boot, which would
-    otherwise make the countdown hit zero early."""
-    _last_scan_status["next_run"] = time.monotonic() + seconds
-    _last_scan_status["next_total"] = seconds
-    time.sleep(seconds)
+            time.sleep(5)
 
 
 def next_scan_in():

@@ -136,6 +136,10 @@
   select.profile-discovery { border-color: var(--cyan); color: var(--cyan); }
   select.profile-deep { border-color: var(--red); color: var(--red); }
   select:disabled { opacity: 0.5; }
+  select.auto-off { border-color: var(--border); color: var(--muted); }
+  select.auto-on { border-color: var(--green); color: var(--green); }
+  .kv b.ok { color: var(--green); }
+  .kv b.warn { color: var(--red); }
   form { margin: 0; }
   button {
     background: var(--accent);
@@ -174,6 +178,7 @@
     margin-bottom: 20px;
     letter-spacing: 0.06em;
   }
+  .error-banner.notice { border-color: var(--accent); color: var(--accent); background: #140800; }
 
   /* ---------- Tags ---------- */
   .tag {
@@ -258,6 +263,11 @@
   .host .count { margin-left: auto; }
   .host .meta { color: var(--muted); font-size: 0.82rem; letter-spacing: 0.06em; margin: 6px 0 8px; }
   .host .meta .mac { font-family: var(--mono); letter-spacing: 0; }
+  .host .os { font-size: 0.85rem; letter-spacing: 0.04em; color: var(--text); margin: -2px 0 8px; }
+  .host .os-k { display: inline-block; font-size: 0.68rem; letter-spacing: 0.12em; padding: 1px 6px 0; margin-right: 4px; color: #000; background: var(--cyan); }
+  .host .os-acc { color: var(--green); }
+  .host .os-acc.lo { color: var(--muted); }
+  .host .os-type { color: var(--muted); }
   table { width: 100%; border-collapse: collapse; }
   th {
     text-align: left;
@@ -410,7 +420,18 @@
       <span class="dot"></span>{{ 'Scanning' if status.running else 'Idle' }}
     </div>
     <span class="kv">Last run <b>{{ status.last_run | when }}</b></span>
+    <span class="kv" title="{{ 'Raw sockets: ARP discovery, SYN scans, OS detection on Deep' if status.mode == 'syn' else 'No raw sockets: TCP connect scans, no OS detection (re-run setup.sh)' }}">Mode <b class="{{ 'ok' if status.mode == 'syn' else 'warn' }}">{{ 'SYN' if status.mode == 'syn' else 'Connect' }}</b></span>
+    <span class="kv">Auto-scan <b id="next-auto" data-next="{{ status.next_in if status.next_in is not none else '' }}">{% if not status.auto_scan %}off{% elif status.running %}after this scan{% elif status.next_in is not none %}in {{ (status.next_in // 60) }}:{{ '%02d' % (status.next_in % 60) }}{% else %}scheduled{% endif %}</b></span>
     <span class="spacer"></span>
+
+    <form action="{{ url_for('set_autoscan') }}" method="post" title="Automatic scans run on this interval using the selected profile">
+      <select name="autoscan" onchange="this.form.submit()" class="{{ 'auto-on' if status.auto_scan else 'auto-off' }}">
+        <option value="off" {{ 'selected' if not status.auto_scan else '' }}>Auto-scan: Off</option>
+        {% for sec, label in intervals %}
+        <option value="{{ sec }}" {{ 'selected' if status.auto_scan and sec == status.scan_interval else '' }}>Auto-scan: every {{ label }}</option>
+        {% endfor %}
+      </select>
+    </form>
 
     <form action="{{ url_for('set_interface') }}" method="post">
       <select name="interface" onchange="this.form.submit()" {{ 'disabled' if status.running else '' }}>
@@ -448,6 +469,9 @@
 {% if status.last_error %}
 <div class="error-banner">LAST SCAN FAILED &middot; {{ status.last_error }}</div>
 {% endif %}
+{% if status.notice %}
+<div class="error-banner notice">NOTE &middot; {{ status.notice }}</div>
+{% endif %}
 
 <div class="grid">
   <div>
@@ -456,6 +480,7 @@
         <h2>Latest scan</h2>
         {% if scan %}
           {% if scan.profile and scan.profile in profiles %}<span class="tag {{ scan.profile }}">{{ profiles[scan.profile].label }}</span>{% endif %}
+          {% if scan.mode %}<span class="tag outline">{{ 'SYN' if scan.mode == 'syn' else 'Connect' }}</span>{% endif %}
           <span class="kv">{{ scan.subnet }} <b>{{ scan.finished_at | when }}</b></span>
         {% endif %}
       </div>
@@ -488,6 +513,11 @@
               {% elif host.mac %}{% if host.vendor %}{{ host.vendor }} &middot; {% endif %}<span class="mac">{{ host.mac }}</span>
               {% else %}<span class="mac">MAC &ndash;</span>{% endif %}
             </div>
+            {% if host.os_name %}
+            <div class="os" title="nmap OS fingerprint guess{% if host.os_type %} &middot; {{ host.os_type }}{% endif %}">
+              <span class="os-k">OS</span> {{ host.os_name }}{% if host.os_accuracy %} <span class="os-acc {{ 'lo' if host.os_accuracy < 90 else '' }}">{{ host.os_accuracy }}%</span>{% endif %}{% if host.os_type %} <span class="os-type">&middot; {{ host.os_type }}</span>{% endif %}
+            </div>
+            {% endif %}
             {% if host.ports %}
             <table>
               <tr><th>Port</th><th>Service</th><th>Product / version</th></tr>
@@ -508,7 +538,7 @@
         {% endfor %}
         </div>
       {% else %}
-        <div class="empty">No scan results yet. Press Scan now or wait for the next automatic scan.</div>
+        <div class="empty">No scan results yet. Press Scan now{% if status.auto_scan %} or wait for the next automatic scan{% else %} (auto-scan is off){% endif %}.</div>
       {% endif %}
     </section>
   </div>
@@ -597,6 +627,32 @@
       .then(function (s) { if (!s.running && !btn.disabled && !window.alianaMirrorOpen) location.reload(); })
       .catch(function () {});
   }, 3000);
+})();
+
+// While idle: tick the auto-scan countdown, and reload when a scan starts or
+// finishes (e.g. an automatic one, or one started from the Pi screen).
+(function () {
+  if (document.getElementById("scan-form").getAttribute("data-running") === "1") return;
+  var el = document.getElementById("next-auto");
+  var left = el && el.getAttribute("data-next") !== "" ? parseInt(el.getAttribute("data-next"), 10) : null;
+  var seq = null;
+  setInterval(function () {
+    if (left === null || !el) return;
+    left = Math.max(0, left - 1);
+    el.textContent = left === 0 ? "starting\u2026" : "in " + Math.floor(left / 60) + ":" + ("0" + left % 60).slice(-2);
+  }, 1000);
+  setInterval(function () {
+    if (window.alianaMirrorOpen) return;
+    fetch("/api/status", { cache: "no-store" })
+      .then(function (r) { return r.json(); })
+      .then(function (s) {
+        if (seq === null) seq = s.outcome_seq;
+        if (s.running || s.outcome_seq !== seq) location.reload();
+        else left = s.next_in;   // resync (settings may have changed elsewhere)
+        if (s.next_in == null && el) el.textContent = s.auto_scan ? "scheduled" : "off";
+      })
+      .catch(function () {});
+  }, 5000);
 })();
 
 // Pi screen viewer: embeds the onboard-screen page (/kiosk) at its native
