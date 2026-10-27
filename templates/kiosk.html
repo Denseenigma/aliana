@@ -497,6 +497,22 @@
     text-shadow: 0 0 6px rgba(255, 122, 0, 0.35);
   }
   .timer-label .ptag { margin: 4px 0 0; vertical-align: 0; }
+  .timer { cursor: pointer; }
+  .calm { display: none; flex: 1; flex-direction: column; justify-content: center; gap: 8px; min-width: 0; }
+  .timer.calm-mode .timer-label, .timer.calm-mode #seg { display: none; }
+  .timer.calm-mode .calm { display: flex; }
+  .calm-head { display: flex; align-items: baseline; gap: 10px; }
+  .calm-k { font-family: var(--cond); font-size: 11px; letter-spacing: 0.14em; color: var(--muted); }
+  .calm-t {
+    font-family: var(--title);
+    font-size: 30px;
+    line-height: 30px;
+    letter-spacing: 0.03em;
+    color: var(--muted);
+  }
+  .calm-prof { margin-left: auto; font-family: var(--cond); font-size: 11px; letter-spacing: 0.14em; color: var(--muted); }
+  .calm-svc { display: flex; flex-wrap: wrap; gap: 4px 6px; font-family: var(--mono); font-size: 12px; }
+  .calm-svc .muted { color: var(--muted); }
   #seg { flex: 1; height: 100%; max-height: 74px; min-width: 0; }
   #seg polygon, #seg rect { fill: rgba(255, 122, 0, 0.07); }
   #seg .on { fill: var(--orange); }
@@ -654,6 +670,15 @@
   <div class="timer" id="timer">
     <div class="timer-label"><span id="timer-what">Next scan</span><b id="timer-prof">&ndash;</b></div>
     <svg id="seg" preserveAspectRatio="xMidYMid meet" aria-label="countdown"></svg>
+    <!-- calm view: tap the timer to switch between the two -->
+    <div class="calm" id="calm">
+      <div class="calm-head">
+        <span class="calm-k" id="calm-k">Next scan</span>
+        <span class="calm-t" id="calm-t">&ndash;</span>
+        <span class="calm-prof" id="calm-prof"></span>
+      </div>
+      <div class="calm-svc" id="calm-svc"></div>
+    </div>
   </div>
 </section>
 
@@ -1095,11 +1120,49 @@
   }
   function timerAtZero() { return nextTarget !== null && Date.now() >= nextTarget - 500; }
 
+  // Tap the timer to flip between the big countdown and a calm view.
+  // The choice is remembered on this screen.
+  var calmMode = false;
+  try { calmMode = localStorage.getItem("aliana.timerView") === "calm"; } catch (e) {}
+  $("timer").addEventListener("click", function () {
+    calmMode = !calmMode;
+    try { localStorage.setItem("aliana.timerView", calmMode ? "calm" : "big"); } catch (e) {}
+    lastCalm = "";
+    updateTimer();
+  });
+
+  var lastCalm = "";   // only touch the calm view's DOM when something changes (SPI screen)
+  function updateCalm() {
+    var t = "\u2013", k = "Next scan";
+    if (nextTarget === null) {
+      k = "Auto-scan"; t = "Standby";
+    } else {
+      var ms = Math.max(0, nextTarget - Date.now());
+      if (ms === 0) { k = "Next scan"; t = "Starting\u2026"; if (!zeroPolled) { zeroPolled = true; poll(); } }
+      else { var sec = Math.ceil(ms / 1000); t = Math.floor(sec / 60) + ":" + ("0" + sec % 60).slice(-2); }
+    }
+    var latest = state.latest;
+    var svc = latest && latest.services && latest.services.length
+      ? latest.services.map(function (sv) {
+          return '<div class="chip">' + esc(sv.name) + "<span>" + sv.count + "</span></div>";
+        }).join("")
+      : '<span class="muted">' + (latest ? "No open ports on the last scan" : "No scans yet") + "</span>";
+    var prof = String(state.profile_label || "").toUpperCase();
+    var key = k + "|" + t + "|" + prof + "|" + svc;
+    if (key === lastCalm) return;
+    lastCalm = key;
+    $("calm-k").textContent = k;
+    $("calm-t").textContent = t;
+    $("calm-prof").textContent = prof;
+    $("calm-svc").innerHTML = svc;
+  }
+
   function updateTimer() {
     var show = state && !state.running && !state.error;
-    $("timer").className = "timer" + (show ? " show" : "");
+    $("timer").className = "timer" + (show ? " show" : "") + (calmMode ? " calm-mode" : "");
     $("feed-list").style.visibility = show ? "hidden" : "";
     if (!show) return;
+    if (calmMode) { updateCalm(); return; }
     var seg = $("seg");
     if (nextTarget === null) {
       setSeg("--:--:--");
