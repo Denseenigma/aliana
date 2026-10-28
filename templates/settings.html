@@ -580,7 +580,10 @@
       }
       return '<label class="fld"><span>' + esc(f.label) + "</span>" + input + (f.help ? "<small>" + esc(f.help) + "</small>" : "") + "</label>";
     }).join("") : "";
-    $("rmm-docs").textContent = p ? p.docs : "Off \u2014 choose a provider to set it up.";
+    $("rmm-docs").textContent = p ? p.docs + (R.encrypted
+        ? " Keys are encrypted on this unit and never sent back to the browser."
+        : " WARNING: the 'cryptography' package is missing \u2014 run setup.sh before saving keys.") :
+      "Off \u2014 choose a provider to set it up.";
     var on = !!p, saved_ = R.provider && p && p.key === R.provider;
     $("rmm-test").style.display = on ? "" : "none";
     $("rmm-save").style.display = on ? "" : "none";

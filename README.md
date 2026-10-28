@@ -187,7 +187,12 @@ copy is over 30 minutes old. Hosts are matched by MAC, then hostname:
 cards show "Datto RMM ✓ hostname · site" (linking to the device in Datto)
 or "Not in Datto RMM"; computers with no match get a **No RMM agent**
 finding; printers, cameras, door controllers and network gear show "no
-agent expected". See `rmm/README.md` to add another RMM.
+agent expected".
+
+API keys are **encrypted at rest** (key file in `~/.config/aliana/`,
+outside the repo) and never sent back to the browser. Step-by-step Datto
+setup, how the keys are stored, and how to add another RMM:
+[`rmm/README.md`](rmm/README.md).
 
 ## Insights: changes, device types, findings, export
 

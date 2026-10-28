@@ -42,7 +42,7 @@ class Datto(Provider):
         {"name": "platform", "label": "Platform", "type": "select", "required": True,
          "options": [(p, p.capitalize() + f"  ({p}-api.centrastage.net)") for p in PLATFORMS],
          "help": "Shown in Datto as the API URL, e.g. https://merlot-api.centrastage.net"},
-        {"name": "api_key", "label": "API key", "type": "text", "required": True},
+        {"name": "api_key", "label": "API key", "type": "password", "required": True},
         {"name": "api_secret", "label": "API secret key", "type": "password", "required": True},
     ]
 

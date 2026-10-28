@@ -7,7 +7,9 @@ hostname). Providers live in this package; see rmm/base.py to add one.
 
 Settings (stored in Aliana's database):
   rmm_provider  -- "" (off) or a provider key, e.g. "datto"
-  rmm_config    -- JSON: provider fields (incl. secrets) + "sites": [uids]
+  rmm_config    -- JSON: provider fields + "sites": [uids]. Password-type
+                   fields (API keys/secrets) are encrypted with vault.py
+                   ("enc:v1:..."); the key file lives outside the repo.
   rmm_status    -- JSON: last sync time / count / error
 """
 import datetime
@@ -16,7 +18,10 @@ import sqlite3
 import threading
 import traceback
 
+import os
+
 import scanner
+import vault
 
 from .base import RMMError, Provider  # noqa: F401  (re-exported for providers)
 from .datto import Datto
@@ -40,6 +45,7 @@ def _db():
 
 
 def init_db():
+    _harden_db()
     conn = _db()
     conn.execute("""
         CREATE TABLE IF NOT EXISTS rmm_devices (
@@ -49,6 +55,44 @@ def init_db():
     """)
     conn.commit()
     conn.close()
+    _encrypt_legacy_secrets()
+
+
+def _harden_db():
+    """The database holds (encrypted) credentials and scan results: owner-only."""
+    try:
+        if os.path.exists(scanner.DB_PATH):
+            os.chmod(scanner.DB_PATH, 0o600)
+    except OSError:
+        pass
+
+
+def _secret_names(key):
+    return [f["name"] for f in PROVIDERS[key].fields if f["type"] == "password"] if key in PROVIDERS else []
+
+
+def _encrypt_legacy_secrets():
+    """Upgrade path: secrets saved by older versions in plain text get
+    encrypted in place at startup."""
+    key = get_provider_key()
+    cfg = get_config()
+    plain = [n for n in _secret_names(key) if cfg.get(n) and not vault.is_encrypted(cfg[n])]
+    if not plain:
+        return
+    try:
+        for n in plain:
+            cfg[n] = vault.encrypt(cfg[n])
+    except vault.VaultError as e:
+        print("aliana: WARNING - RMM credentials are stored unencrypted:", e)
+        return
+    scanner._set_setting("rmm_config", json.dumps(cfg))
+    try:   # don't leave the old plain-text copy behind in free pages
+        conn = _db()
+        conn.execute("VACUUM")
+        conn.close()
+    except sqlite3.Error:
+        pass
+    print("aliana: encrypted %d stored RMM secret(s)" % len(plain))
 
 
 # ---------------------------------------------------------------- settings
@@ -59,10 +103,25 @@ def get_provider_key():
 
 
 def get_config():
+    """The stored config -- secrets still encrypted."""
     try:
         return json.loads(scanner._get_setting("rmm_config", "{}") or "{}")
     except ValueError:
         return {}
+
+
+def _runtime_config(key):
+    """The stored config with secrets decrypted, plus {field: error} for
+    secrets that couldn't be decrypted (those come back as None)."""
+    cfg = dict(get_config())
+    errors = {}
+    for n in _secret_names(key):
+        try:
+            cfg[n] = vault.decrypt(cfg.get(n))
+        except vault.VaultError as e:
+            cfg[n] = None
+            errors[n] = str(e)
+    return cfg, errors
 
 
 def get_status():
@@ -99,7 +158,8 @@ def public_state():
     conn.close()
     return {"provider": key, "label": PROVIDERS[key].label if key else None, "config": safe,
             "sites": cfg.get("sites") or [], "site_names": cfg.get("site_names") or {},
-            "providers": providers, "status": get_status(), "device_count": count}
+            "providers": providers, "status": get_status(), "device_count": count,
+            "encrypted": vault.available()}
 
 
 def save_config(provider, values, sites=None, site_names=None):
@@ -127,6 +187,11 @@ def save_config(provider, values, sites=None, site_names=None):
             v = v.strip()
         if f["type"] == "select" and v not in [o[0] for o in f["options"]]:
             v = None
+        if f["type"] == "password" and v:
+            try:
+                v = vault.encrypt(v)
+            except vault.VaultError as e:
+                raise RMMError(str(e))
         cfg[f["name"]] = v
     cfg["sites"] = list(sites) if sites is not None else old.get("sites", [])
     cfg["site_names"] = dict(site_names) if site_names is not None else old.get("site_names", {})
@@ -138,7 +203,7 @@ def _instance(provider=None, values=None):
     key = provider or get_provider_key()
     if not key:
         raise RMMError("No RMM is set up.")
-    cfg = get_config() if key == get_provider_key() else {}
+    cfg, errors = _runtime_config(key) if key == get_provider_key() else ({}, {})
     if values:   # testing unsaved values from the form
         merged = dict(cfg)
         for f in PROVIDERS[key].fields:
@@ -147,6 +212,9 @@ def _instance(provider=None, values=None):
                 continue
             merged[f["name"]] = v.strip() if isinstance(v, str) else v
         cfg = merged
+    for n, err in errors.items():
+        if not cfg.get(n):
+            raise RMMError(err)
     return PROVIDERS[key](cfg)
 
 
@@ -169,7 +237,7 @@ def sync():
     started = datetime.datetime.now().isoformat()
     try:
         cfg = get_config()
-        devices = PROVIDERS[key](cfg).fetch(cfg.get("sites") or None)
+        devices = _instance(key).fetch(cfg.get("sites") or None)
         conn = _db()
         conn.execute("DELETE FROM rmm_devices WHERE provider = ?", (key,))
         conn.executemany(

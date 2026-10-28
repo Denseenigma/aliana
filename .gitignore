@@ -2,3 +2,15 @@ venv/
 *.db
 __pycache__/
 *.pyc
+
+# Never commit local data or secrets
+*.db-journal
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+*.key
+*.pem
+.env
+.env.*
+secret*.json
