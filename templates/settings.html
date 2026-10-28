@@ -269,6 +269,21 @@
   .lv-ok { color: var(--green) !important; }
   .lv-warn { color: var(--accent) !important; }
   .lv-confirm, .lv-refuse { color: var(--red) !important; }
+  .rmm-panel { grid-column: 1 / -1; }
+  .rmm-form { display: flex; flex-wrap: wrap; gap: 10px 14px; align-items: flex-end; }
+  #rmm-fields { display: contents; }
+  .fld { display: flex; flex-direction: column; gap: 4px; font-size: 0.72rem; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); }
+  .fld input, .fld select { min-width: 230px; }
+  .fld input.secret { font-family: var(--mono); }
+  .fld small { text-transform: none; letter-spacing: 0.02em; font-size: 0.72rem; color: var(--border); max-width: 320px; }
+  .rmm-msg { margin-top: 10px; font-size: 0.88rem; letter-spacing: 0.03em; min-height: 1em; }
+  .rmm-msg.ok { color: var(--green); } .rmm-msg.err { color: var(--red); }
+  .rmm-sites { margin-top: 10px; }
+  .rmm-sites .head { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; margin-bottom: 8px; font-size: 0.8rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+  .rmm-sites .list { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 4px 14px; max-height: 260px; overflow-y: auto; padding: 8px; border: 1px solid var(--border); }
+  .rmm-sites label { display: flex; gap: 8px; align-items: center; font-size: 0.88rem; color: var(--text); cursor: pointer; }
+  .rmm-sites label small { color: var(--muted); }
+  .rmm-sites input[type=checkbox] { width: auto; accent-color: #ff7a00; }
   .saved { color: var(--green); font-size: 0.8rem; letter-spacing: 0.1em; text-transform: uppercase; opacity: 0; transition: opacity 0.3s; }
   .saved.show { opacity: 1; }
 </style>
@@ -288,7 +303,7 @@
     </svg>
     Aliana <small>settings</small>
   </h1>
-  <nav class="nav"><a href="/">Dashboard</a><a href="/queue">Queue</a><a href="/settings" class="on">Settings</a><a href="/wifi">Wi-Fi</a></nav>
+  <nav class="nav"><a href="/">Dashboard</a><a href="/queue">Queue</a><a href="/devices">Devices</a><a href="/settings" class="on">Settings</a><a href="/wifi">Wi-Fi</a></nav>
   <div class="controls">
     <span class="kv">Changes save as you make them</span>
     <span class="spacer"></span>
@@ -344,6 +359,29 @@
       Pi screen, Queue page and auto-scan.</p>
     <div class="guard-rows" id="guard-rows"></div>
     <div class="readout" id="guard-now"></div>
+  </section>
+
+  <section class="panel rmm-panel">
+    <div class="panel-head"><h2>RMM integration</h2><span class="kv" id="rmm-kv"></span></div>
+    <p class="desc">Checks whether scanned devices are managed by your RMM: Aliana pulls the RMM's device list
+      (<b>read-only</b>) and matches hosts by <b>MAC address</b>, then by hostname. Computers that aren't in the RMM get a
+      <b>No RMM agent</b> finding. Printers, cameras, door controllers and network gear show "no agent expected".</p>
+    <div class="rmm-form">
+      <label class="fld"><span>Provider</span><select id="rmm-provider"></select></label>
+      <div id="rmm-fields"></div>
+    </div>
+    <p class="hint" id="rmm-docs"></p>
+    <div class="add" id="rmm-buttons">
+      <button type="button" class="ghost" id="rmm-test">Test connection</button>
+      <button type="button" id="rmm-save">Save</button>
+      <button type="button" class="ghost" id="rmm-sync">Sync now</button>
+      <button type="button" class="red sm" id="rmm-off">Disconnect</button>
+    </div>
+    <div class="rmm-msg" id="rmm-msg"></div>
+    <div id="rmm-sites" class="rmm-sites"></div>
+    <div class="readout" id="rmm-status"></div>
+    <p class="hint">Credentials are stored on this Aliana unit and never shown again in the browser. Use a dedicated
+      API user with view-only permissions. The Pi needs internet access to reach the RMM's API.</p>
   </section>
 </div>
 
@@ -471,6 +509,147 @@
     if (S.auto_scan && S.next_in > 0) { S.next_in -= 1; render(); }
   }, 1000);
   render();
+})();
+
+// ---------------- RMM integration ----------------
+(function () {
+  var $ = function (id) { return document.getElementById(id); };
+  var R = null, sites = null, pollT = null;
+  function esc(s) { return String(s == null ? "" : s).replace(/[&<>"]/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]; }); }
+  function when(iso) {
+    if (!iso) return "never";
+    var d = new Date(iso);
+    return d.toLocaleDateString(undefined, { month: "short", day: "numeric" }) + " " + ("0" + d.getHours()).slice(-2) + ":" + ("0" + d.getMinutes()).slice(-2);
+  }
+  function msg(t, ok) { var m = $("rmm-msg"); m.textContent = t || ""; m.className = "rmm-msg" + (t ? (ok ? " ok" : " err") : ""); }
+  function prov() { var k = $("rmm-provider").value; return R.providers.filter(function (p) { return p.key === k; })[0] || null; }
+  function values() {
+    var v = {};
+    document.querySelectorAll("#rmm-fields [data-name]").forEach(function (el) { v[el.getAttribute("data-name")] = el.value; });
+    return v;
+  }
+  function renderFields() {
+    var p = prov(), saved = (p && p.key === R.provider) ? R.config : {};
+    $("rmm-fields").innerHTML = p ? p.fields.map(function (f) {
+      var val = saved[f.name] || "";
+      var input;
+      if (f.type === "select") {
+        input = '<select data-name="' + f.name + '">' + f.options.map(function (o) {
+          return '<option value="' + esc(o[0]) + '"' + (o[0] === val ? " selected" : "") + ">" + esc(o[1]) + "</option>";
+        }).join("") + "</select>";
+      } else if (f.type === "password") {
+        input = '<input type="password" class="secret" data-name="' + f.name + '" autocomplete="new-password" placeholder="' +
+          (val === "__saved__" ? "Saved \u2014 leave blank to keep" : "") + '">';
+      } else {
+        input = '<input type="text" class="secret" data-name="' + f.name + '" autocomplete="off" spellcheck="false" value="' + esc(val) + '">';
+      }
+      return '<label class="fld"><span>' + esc(f.label) + "</span>" + input + (f.help ? "<small>" + esc(f.help) + "</small>" : "") + "</label>";
+    }).join("") : "";
+    $("rmm-docs").textContent = p ? p.docs : "Off \u2014 choose a provider to set it up.";
+    var on = !!p, saved_ = R.provider && p && p.key === R.provider;
+    $("rmm-test").style.display = on ? "" : "none";
+    $("rmm-save").style.display = on ? "" : "none";
+    $("rmm-sync").style.display = saved_ ? "" : "none";
+    $("rmm-off").style.display = R.provider ? "" : "none";
+    if (!sites && saved_ && p.has_sites && R.sites.length) renderSites(null);   // show saved selection
+  }
+  function renderSites(list) {
+    var p = prov();
+    if (!p || !p.has_sites) { $("rmm-sites").innerHTML = ""; return; }
+    if (list) sites = list;
+    var chosen = {}, names = R.site_names || {};
+    (R.sites || []).forEach(function (u) { chosen[u] = true; });
+    var src = sites || (R.sites || []).map(function (u) { return { uid: u, name: names[u] || u }; });
+    if (!src.length) { $("rmm-sites").innerHTML = ""; return; }
+    var all = !(R.sites || []).length;
+    $("rmm-sites").innerHTML = '<div class="head"><span>Sites to check</span>' +
+      '<label><input type="checkbox" id="rmm-all"' + (all ? " checked" : "") + "> All sites (" + src.length + ")</label>" +
+      (src.length > 12 ? '<input type="search" id="rmm-site-q" placeholder="Filter sites\u2026" style="width:200px">' : "") + "</div>" +
+      '<div class="list" id="rmm-site-list"' + (all ? ' style="opacity:.45"' : "") + ">" + src.map(function (s) {
+        return '<label data-n="' + esc((s.name || "").toLowerCase()) + '"><input type="checkbox" value="' + esc(s.uid) + '" data-name="' + esc(s.name) + '"' +
+          (chosen[s.uid] ? " checked" : "") + (all ? " disabled" : "") + "> " + esc(s.name) +
+          (s.devices != null ? " <small>" + s.devices + "</small>" : "") + "</label>";
+      }).join("") + "</div>";
+    $("rmm-all").addEventListener("change", function () {
+      var on = this.checked;
+      $("rmm-site-list").style.opacity = on ? ".45" : "";
+      $("rmm-site-list").querySelectorAll("input").forEach(function (c) { c.disabled = on; });
+    });
+    var q = $("rmm-site-q");
+    if (q) q.addEventListener("input", function () {
+      var t = q.value.toLowerCase();
+      $("rmm-site-list").querySelectorAll("label").forEach(function (l) { l.style.display = l.getAttribute("data-n").indexOf(t) >= 0 ? "" : "none"; });
+    });
+  }
+  function chosenSites() {
+    var all = $("rmm-all");
+    if (!all || all.checked) return { sites: [], names: {} };
+    var u = [], n = {};
+    $("rmm-site-list").querySelectorAll("input:checked").forEach(function (c) { u.push(c.value); n[c.value] = c.getAttribute("data-name"); });
+    return { sites: u, names: n };
+  }
+  function renderStatus() {
+    var st = R.status || {}, t = "";
+    if (R.provider) {
+      t = "Status <b" + (st.error ? ' style="color:var(--red)"' : ' class="ok"') + ">" +
+        (st.syncing ? "Syncing\u2026" : st.error ? "Error" : st.last_sync ? "Connected" : "Saved, not synced yet") + "</b>" +
+        " &nbsp;&middot;&nbsp; Last sync <b>" + when(st.last_sync) + "</b>" +
+        (st.last_sync ? " &nbsp;&middot;&nbsp; <b>" + (st.count || 0) + "</b> devices (" + (st.with_mac || 0) + " with MAC)" : "") +
+        ((R.sites || []).length ? " &nbsp;&middot;&nbsp; <b>" + R.sites.length + "</b> site" + (R.sites.length === 1 ? "" : "s") : " &nbsp;&middot;&nbsp; all sites");
+      if (st.error && !st.syncing) t += '<div style="color:var(--red);margin-top:4px;text-transform:none;letter-spacing:.03em">' + esc(st.error) + "</div>";
+    }
+    $("rmm-status").innerHTML = t;
+    $("rmm-kv").innerHTML = R.provider ? "<b>" + esc(R.label) + "</b>" : "Off";
+    clearTimeout(pollT);
+    if (st.syncing) pollT = setTimeout(load, 1500);
+  }
+  function load() {
+    fetch("/api/rmm", { cache: "no-store" }).then(function (r) { return r.json(); }).then(function (d) {
+      var first = !R;
+      R = d;
+      if (first) {
+        $("rmm-provider").innerHTML = '<option value="">Off</option>' + d.providers.map(function (p) {
+          return '<option value="' + p.key + '">' + esc(p.label) + "</option>";
+        }).join("");
+        $("rmm-provider").value = d.provider || "";
+        renderFields();
+      }
+      renderStatus();
+    });
+  }
+  function post(url, body) {
+    return fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body || {}) })
+      .then(function (r) { return r.json(); });
+  }
+  $("rmm-provider").addEventListener("change", function () { sites = null; $("rmm-sites").innerHTML = ""; msg(""); renderFields(); });
+  $("rmm-test").addEventListener("click", function () {
+    var b = this; b.disabled = true; msg("Testing\u2026", true);
+    post("/api/rmm/test", { provider: $("rmm-provider").value, values: values() }).then(function (d) {
+      b.disabled = false;
+      if (d.ok) { msg(d.message, true); if (d.sites) renderSites(d.sites); }
+      else msg(d.error || "Test failed.");
+    }).catch(function () { b.disabled = false; msg("Aliana didn't respond."); });
+  });
+  $("rmm-save").addEventListener("click", function () {
+    var cs = chosenSites();
+    post("/api/rmm/save", { provider: $("rmm-provider").value, values: values(), sites: cs.sites, site_names: cs.names })
+      .then(function (d) {
+        if (!d.ok) { msg(d.error || "Couldn't save."); return; }
+        R = d.state; msg("Saved. Syncing\u2026", true); renderFields(); renderStatus();
+        return post("/api/rmm/sync").then(function () { setTimeout(load, 800); });
+      });
+  });
+  $("rmm-sync").addEventListener("click", function () { msg(""); post("/api/rmm/sync").then(function () { setTimeout(load, 500); }); });
+  $("rmm-off").addEventListener("click", function () {
+    var b = this;
+    if (!b.classList.contains("armed")) { b.classList.add("armed"); b.textContent = "Click again to remove credentials"; return; }
+    post("/api/rmm/save", { provider: "" }).then(function (d) {
+      R = d.state; sites = null; b.classList.remove("armed"); b.textContent = "Disconnect";
+      $("rmm-provider").value = ""; $("rmm-sites").innerHTML = ""; msg("Disconnected \u2014 credentials removed.", true);
+      renderFields(); renderStatus();
+    });
+  });
+  load();
 })();
 </script>
 </body>

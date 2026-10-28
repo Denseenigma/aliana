@@ -16,12 +16,15 @@ from flask import Flask, render_template, jsonify, redirect, url_for, request, R
 
 import scanner
 import insights
+import history
+import rmm
 import wifi
 import qr
 
 PORT = 8080
 
 app = Flask(__name__)
+app.config["MAX_CONTENT_LENGTH"] = 64 * 1024 * 1024   # history imports
 
 
 @app.template_filter("when")
@@ -286,11 +289,144 @@ def export_csv(scan_id):
 
 @app.route("/scan/<int:scan_id>/export.json")
 def export_json(scan_id):
-    scan = _scan_or_404(scan_id)
+    """This one scan in Aliana's history format (importable)."""
+    scan = scanner.get_scan(scan_id)
     if scan is None:
         return jsonify({}), 404
-    return Response(json.dumps(scan, indent=2, default=str), mimetype="application/json",
+    return Response(json.dumps(history.export_bundle([scan_id]), indent=1), mimetype="application/json",
                     headers={"Content-Disposition": f'attachment; filename="{_export_name(scan, "json")}"'})
+
+
+# ---------------------------------------------------------------- history / devices
+
+@app.route("/export/history.json")
+def export_history():
+    """Every scan this unit knows (its own and imported) -- import it on
+    another day or another Aliana to keep building the same history."""
+    stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M")
+    return Response(json.dumps(history.export_bundle(), indent=1), mimetype="application/json",
+                    headers={"Content-Disposition":
+                             f'attachment; filename="aliana-history-{socket.gethostname()}-{stamp}.json"'})
+
+
+@app.route("/export/devices.csv")
+def export_devices():
+    data = history.list_devices()
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(["mac", "vendor", "hostname", "last_ip", "device_type", "first_seen", "last_seen", "times_seen",
+                "in_latest_scan", "ips_seen", "hostnames_seen", "networks", "open_ports", "os_guess",
+                "rmm_status", "rmm_hostname", "rmm_site", "flags"])
+    for d in data["devices"]:
+        m = rmm.match(d["_host"], d["device"]["type"])
+        w.writerow([d["mac"], d["vendor"] or "", d["hostname"] or "", d["ip"], d["device"]["label"], d["first_seen"],
+                    d["last_seen"], d["sightings"], "yes" if d["present"] else "no", " ".join(d["ips"]),
+                    " ".join(d["hostnames"]), " ".join(d["networks"]),
+                    " ".join(f"{p}/{pr}" for p, pr in d["open_ports"]), d["os_name"] or "",
+                    (m or {}).get("status", ""), ((m or {}).get("device") or {}).get("hostname", ""),
+                    ((m or {}).get("device") or {}).get("site", ""),
+                    "; ".join(f["label"] for f in d["flags"])])
+    stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M")
+    return Response(buf.getvalue(), mimetype="text/csv",
+                    headers={"Content-Disposition": f'attachment; filename="aliana-devices-{stamp}.csv"'})
+
+
+@app.route("/api/import", methods=["POST"])
+def api_import():
+    """Multipart upload of one or more Aliana JSON exports."""
+    files = request.files.getlist("files")
+    if not files:
+        return jsonify({"ok": False, "error": "Choose one or more Aliana .json export files."}), 400
+    total = {"scans_added": 0, "scans_skipped": 0, "hosts_added": 0, "new_devices": 0, "errors": [], "files": []}
+    for f in files:
+        name = (f.filename or "file")[:80]
+        try:
+            data = json.loads(f.read().decode("utf-8"))
+            r = history.import_bundle(data)
+        except (ValueError, UnicodeDecodeError) as e:
+            total["errors"].append(f"{name}: {e}" if isinstance(e, history.ImportFailed)
+                                   else f"{name}: not a readable JSON file")
+            continue
+        total["files"].append({"name": name, **r})
+        for k in ("scans_added", "scans_skipped", "hosts_added", "new_devices"):
+            total[k] += r[k]
+        total["errors"] += [f"{name}: {e}" for e in r["errors"]]
+    insights._summary_cache.clear()
+    return jsonify({"ok": not total["errors"] or total["scans_added"] > 0, **total})
+
+
+def _device_view(d):
+    d = dict(d)
+    d["rmm"] = rmm.match(d["_host"], d["device"]["type"])
+    if d["rmm"] and d["rmm"]["status"] == "missing":
+        d["flags"] = sorted(d["flags"] + [insights.rmm_flag(d["rmm"])],
+                            key=lambda f: insights.LEVEL_ORDER[f["level"]])
+    d.pop("_host", None)
+    return d
+
+
+@app.route("/devices")
+def devices_page():
+    data = history.list_devices()
+    devs = [_device_view(d) for d in data["devices"]]
+    counts = {"total": len(devs), "present": sum(1 for d in devs if d["present"]),
+              "managed": sum(1 for d in devs if d["rmm"] and d["rmm"]["status"] == "managed"),
+              "missing": sum(1 for d in devs if d["rmm"] and d["rmm"]["status"] == "missing")}
+    return render_template("devices.html", devices=devs, counts=counts, untracked=data["untracked_ips"],
+                           span=data["scans"], status=scanner.get_status(), rmm_state=rmm.public_state())
+
+
+@app.route("/device/<mac>")
+def device_page(mac):
+    h = history.device_history(mac)
+    if not h:
+        return redirect(url_for("devices_page"))
+    return render_template("device.html", d=_device_view(h["device"]), timeline=h["timeline"],
+                           profiles=scanner.PROFILES, status=scanner.get_status())
+
+
+@app.route("/api/devices")
+def api_devices():
+    return jsonify([_device_view(d) for d in history.list_devices()["devices"]])
+
+
+# ---------------------------------------------------------------- RMM integration
+
+@app.route("/api/rmm")
+def api_rmm():
+    return jsonify(rmm.public_state())
+
+
+@app.route("/api/rmm/save", methods=["POST"])
+def api_rmm_save():
+    data = request.get_json(silent=True) or {}
+    try:
+        rmm.save_config(data.get("provider") or "", data.get("values") or {},
+                        data.get("sites"), data.get("site_names"))
+    except rmm.RMMError as e:
+        return jsonify({"ok": False, "error": str(e)}), 400
+    return jsonify({"ok": True, "state": rmm.public_state()})
+
+
+@app.route("/api/rmm/test", methods=["POST"])
+def api_rmm_test():
+    data = request.get_json(silent=True) or {}
+    try:
+        r = rmm.test(data.get("provider") or None, data.get("values") or {})
+    except rmm.RMMError as e:
+        return jsonify({"ok": False, "error": str(e)}), 400
+    except Exception as e:
+        return jsonify({"ok": False, "error": f"Unexpected error: {e}"}), 500
+    return jsonify(r)
+
+
+@app.route("/api/rmm/sync", methods=["POST"])
+def api_rmm_sync():
+    if not rmm.get_provider_key():
+        return jsonify({"ok": False, "error": "Set up an RMM first."}), 400
+    started = rmm.sync_in_background()
+    time.sleep(0.2)
+    return jsonify({"ok": True, "started": started, "state": rmm.public_state()})
 
 
 @app.route("/scan/<int:scan_id>/report")
@@ -610,6 +746,8 @@ def api_history():
 
 if __name__ == "__main__":
     scanner.init_db()
+    rmm.init_db()
+    scanner.on_job_done.append(rmm.maybe_sync_after)
     # The queue worker runs every scan, one at a time; the auto-scan loop
     # adds a network scan to the queue whenever one is due
     threading.Thread(target=scanner.queue_worker, daemon=True).start()

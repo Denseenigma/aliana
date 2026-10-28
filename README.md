@@ -132,6 +132,39 @@ every scan; changes save immediately:
   open but never get service-identification probes (default `9999`;
   `ALIANA_NO_PROBE_PORTS` sets the default for a fresh install).
 
+## Devices & long-term history
+
+Aliana keeps a **living history** of each network, with devices identified
+by **MAC address** (IPs change with DHCP; hosts without a MAC -- this unit,
+or anything behind a router -- are counted but not tracked).
+
+- **Devices** page (`/devices`): one row per MAC ever seen -- type, last IP
+  (and how many IPs it's had), first/last seen, times seen, open ports, RMM
+  status, flags. Search and filter (in latest scan / not seen lately / no
+  RMM agent / flagged). Click a device for its **timeline** (`/device/<mac>`):
+  every sighting with IP, hostname, open ports, IP changes and ports
+  opened/closed between scans.
+- **Export all history** (`/export/history.json`, also on the dashboard and
+  Devices page) saves every scan in one file; **Import history** on the
+  Devices page merges exports back in -- on this unit or another. Scans
+  already present are skipped (each scan has a uid), so re-importing is
+  safe. Single-scan JSON exports import too. Routine: scan, export; next
+  visit, import, scan -- change alerts then compare against the last visit.
+- Scans are ordered by when they finished, so imported (older) scans slot
+  into the right place in the timeline.
+- **Devices (CSV)** exports the inventory.
+
+## RMM integration (Datto RMM; more providers welcome)
+
+Settings > **RMM integration**: choose a provider, enter credentials, *Test
+connection*, pick which sites to check (or all), *Save* -- Aliana syncs the
+RMM's device list (read-only) and re-syncs after network scans when the
+copy is over 30 minutes old. Hosts are matched by MAC, then hostname:
+cards show "Datto RMM ✓ hostname · site" (linking to the device in Datto)
+or "Not in Datto RMM"; computers with no match get a **No RMM agent**
+finding; printers, cameras, door controllers and network gear show "no
+agent expected". See `rmm/README.md` to add another RMM.
+
 ## Insights: changes, device types, findings, export
 
 All worked out from what the scans already recorded -- no extra probing

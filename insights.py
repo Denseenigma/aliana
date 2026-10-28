@@ -184,8 +184,9 @@ def scan_changes(scan_id):
     if not cur or (cur["scope"] or "subnet") != "subnet":
         conn.close()
         return None
-    prev = c.execute("SELECT * FROM scans WHERE id < ? AND COALESCE(scope, 'subnet') = 'subnet' "
-                     "AND subnet = ? ORDER BY id DESC LIMIT 1", (scan_id, cur["subnet"])).fetchone()
+    prev = c.execute("SELECT * FROM scans WHERE " + scanner._BEFORE + " AND COALESCE(scope, 'subnet') = 'subnet' "
+                     "AND subnet = ? ORDER BY finished_at DESC, id DESC LIMIT 1",
+                     (cur["finished_at"], cur["finished_at"], cur["id"], cur["subnet"])).fetchone()
     if not prev:
         conn.close()
         return None
@@ -256,6 +257,22 @@ def latest_changes_summary():
     return _summary_cache[sid]
 
 
+# ---------------------------------------------------------------- RMM
+
+def rmm_check(host, device_type):
+    """RMM match for a host (None when no RMM integration is set up)."""
+    try:
+        import rmm
+        return rmm.match(host, device_type)
+    except Exception:
+        return None
+
+
+def rmm_flag(m):
+    return {"key": "rmm", "level": "medium", "label": "No RMM agent", "ports": [],
+            "detail": f"Looks like a computer, but it isn't in {m['provider']} (no match by MAC or hostname)."}
+
+
 # ---------------------------------------------------------------- all together
 
 def annotate(scan):
@@ -268,14 +285,24 @@ def annotate(scan):
     new_ips = {h["ip"] for h in (ch or {}).get("new_hosts", [])}
     opened = {(o["ip"], o["port"], o["protocol"]) for o in (ch or {}).get("opened", [])}
     counts = {"high": 0, "medium": 0, "low": 0}
+    rmm_counts = {"managed": 0, "missing": 0, "na": 0}
+    rmm_on = False
     for h in scan.get("hosts", []):
         h["device"] = classify_host(h)
         h["flags"] = host_flags(h)
+        h["rmm"] = rmm_check(h, h["device"]["type"])
+        if h["rmm"]:
+            rmm_on = True
+            rmm_counts[h["rmm"]["status"]] += 1
+            if h["rmm"]["status"] == "missing":
+                h["flags"].append(rmm_flag(h["rmm"]))
+                h["flags"].sort(key=lambda f: LEVEL_ORDER[f["level"]])
         for f in h["flags"]:
             counts[f["level"]] += 1
         h["is_new"] = h["ip"] in new_ips
         for p in h.get("ports", []):
             p["is_new"] = (h["ip"], p["port"], p["protocol"]) in opened
     scan["flag_counts"] = counts
+    scan["rmm"] = rmm_counts if rmm_on else None
     scan["flag_total"] = sum(counts.values())
     return scan

@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Aliana Devices</title>
+<style>
+{% include "_theme.css.html" %}
+  .stats { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; margin-bottom: 18px; }
+  @media (max-width: 900px) { .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  .stat { border: 1px solid var(--accent); background: #000; }
+  .stat .label { display: inline-block; background: var(--accent); color: #000; font-size: 0.72rem;
+                 letter-spacing: 0.12em; text-transform: uppercase; padding: 2px 8px 1px; }
+  .stat .num { font-family: var(--title); font-size: 2.2rem; line-height: 1.1; text-align: right; padding: 2px 12px 4px; }
+  .stat.bad { border-color: var(--red); } .stat.bad .label { background: var(--red); }
+  .stat.ok .num { color: var(--green); }
+  .toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; margin-bottom: 12px; }
+  .toolbar input[type=search] { width: 260px; font-family: var(--sans); letter-spacing: 0.03em; }
+  .chipf { background: transparent; color: var(--muted); box-shadow: inset 0 0 0 1px var(--border); clip-path: none;
+           font-family: var(--sans); font-size: 0.78rem; letter-spacing: 0.12em; padding: 7px 12px 6px; }
+  .chipf:hover { background: transparent; color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+  .chipf.on { background: var(--accent); color: #000; box-shadow: none; }
+  table.devs { width: 100%; border-collapse: collapse; }
+  .devs th { text-align: left; font-weight: inherit; font-size: 0.7rem; letter-spacing: 0.12em; text-transform: uppercase;
+             color: var(--accent); padding: 4px 10px 6px 0; border-bottom: 1px solid var(--border); white-space: nowrap; }
+  .devs td { padding: 7px 10px 7px 0; border-bottom: 1px solid rgba(107, 50, 0, 0.45); font-size: 0.88rem; vertical-align: middle; }
+  .devs tr:hover td { background: rgba(255, 122, 0, 0.05); }
+  .devs tr.gone td { opacity: 0.55; }
+  .devs a { color: var(--text); text-decoration: none; }
+  .devs a:hover { color: var(--accent); }
+  .mac { font-family: var(--mono); font-size: 0.82rem; letter-spacing: 0; }
+  .ipc { font-family: var(--mono); font-size: 0.82rem; color: var(--accent); letter-spacing: 0; }
+  .sm2 { display: block; font-size: 0.72rem; color: var(--muted); letter-spacing: 0.05em; }
+  .hexb {
+    width: 34px; height: 28px; display: inline-flex; align-items: center; justify-content: center;
+    background: var(--accent); color: #000; font-size: 0.66rem; letter-spacing: 0.04em;
+    clip-path: polygon(25% 0, 75% 0, 100% 50%, 75% 100%, 25% 100%, 0 50%);
+  }
+  .hexb.t-access, .hexb.t-camera { background: var(--red); }
+  .hexb.t-network { background: var(--cyan); }
+  .hexb.t-unknown { background: var(--border); color: var(--text); }
+  .pres { display: inline-block; width: 8px; height: 8px; margin-right: 6px; background: var(--border); }
+  .pres.on { background: var(--green); box-shadow: 0 0 5px var(--green); }
+  .ports { font-family: var(--mono); font-size: 0.76rem; color: var(--muted); letter-spacing: 0; max-width: 220px; }
+  .rm { font-size: 0.72rem; letter-spacing: 0.1em; text-transform: uppercase; white-space: nowrap; }
+  .rm.managed { color: var(--green); } .rm.missing { color: var(--red); } .rm.na { color: var(--muted); }
+  .flag { display: inline-block; font-size: 0.66rem; letter-spacing: 0.1em; text-transform: uppercase; padding: 1px 6px 0; margin: 1px 2px 1px 0; }
+  .flag.high { background: var(--red); color: #000; }
+  .flag.medium { color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+  .flag.low { color: var(--muted); box-shadow: inset 0 0 0 1px var(--border); }
+  .imp { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .imp input[type=file] { color: var(--muted); font-family: var(--sans); font-size: 0.85rem; width: auto; border: none; padding: 0; }
+  .imp-result { margin-top: 10px; font-size: 0.85rem; letter-spacing: 0.03em; }
+  .imp-result b { color: var(--green); font-weight: inherit; }
+  .imp-result .err { color: var(--red); display: block; }
+  .exports { display: flex; gap: 6px; flex-wrap: wrap; }
+  .exports a { color: var(--accent); text-decoration: none; font-size: 0.78rem; letter-spacing: 0.14em; text-transform: uppercase;
+               padding: 6px 12px 5px; box-shadow: inset 0 0 0 1px var(--accent); }
+  .exports a:hover { background: var(--accent); color: #000; }
+  .wide { overflow-x: auto; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>
+    <svg viewBox="0 0 120 100" xmlns="http://www.w3.org/2000/svg" fill="currentColor" aria-hidden="true">
+      <path d="M30 70 L10 85 L35 78 Z"/>
+      <ellipse cx="55" cy="60" rx="22" ry="14" transform="rotate(-10 55 60)"/>
+      <path d="M50 50 C40 20, 70 15, 85 35 C70 30, 55 35, 50 50 Z"/>
+      <circle cx="82" cy="45" r="11"/>
+      <path d="M92 45 L104 42 L92 50 Z"/>
+      <path d="M60 72 L58 88 M68 73 L70 89" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"/>
+    </svg>
+    Aliana <small>devices</small>
+  </h1>
+  <nav class="nav"><a href="/">Dashboard</a><a href="/queue">Queue</a><a href="/devices" class="on">Devices</a><a href="/settings">Settings</a><a href="/wifi">Wi-Fi</a></nav>
+  <div class="controls">
+    <span class="kv">History <b>{% if span.count %}{{ span.first | when }} &ndash; {{ span.last | when }}{% else %}none yet{% endif %}</b></span>
+    <span class="kv">Scans <b>{{ span.count }}{% if span.imported %} &middot; {{ span.imported }} imported{% endif %}</b></span>
+    <span class="kv">Tracked by <b>MAC address</b></span>
+  </div>
+</header>
+
+<div class="stats">
+  <div class="stat"><span class="label">Devices</span><div class="num">{{ counts.total }}</div></div>
+  <div class="stat ok"><span class="label">In latest scan</span><div class="num">{{ counts.present }}</div></div>
+  <div class="stat"><span class="label">Not seen lately</span><div class="num">{{ counts.total - counts.present }}</div></div>
+  {% if rmm_state.provider %}
+  <div class="stat ok"><span class="label">In {{ rmm_state.label }}</span><div class="num">{{ counts.managed }}</div></div>
+  <div class="stat {{ 'bad' if counts.missing else '' }}"><span class="label">No RMM agent</span><div class="num">{{ counts.missing }}</div></div>
+  {% else %}
+  <div class="stat"><span class="label">RMM</span><div class="num" style="font-size:1.1rem;line-height:2.6"><a href="/settings" style="color:var(--accent)">Set up</a></div></div>
+  <div class="stat"><span class="label">Untracked (no MAC)</span><div class="num">{{ untracked }}</div></div>
+  {% endif %}
+</div>
+
+<div class="grid" style="grid-template-columns:minmax(0,1fr) 360px">
+  <section class="panel">
+    <div class="panel-head"><h2>Inventory</h2><span class="kv" id="shown"></span></div>
+    <div class="toolbar">
+      <input type="search" id="q" placeholder="Search MAC, IP, name, vendor&hellip;" autocomplete="off">
+      <button type="button" class="chipf on" data-f="all">All</button>
+      <button type="button" class="chipf" data-f="present">In latest scan</button>
+      <button type="button" class="chipf" data-f="gone">Not seen lately</button>
+      {% if rmm_state.provider %}<button type="button" class="chipf" data-f="missing">No RMM agent</button>{% endif %}
+      <button type="button" class="chipf" data-f="flagged">Flagged</button>
+    </div>
+    {% if devices %}
+    <div class="wide">
+    <table class="devs">
+      <tr><th></th><th>Device</th><th>Last IP</th><th>Seen</th><th>Open ports</th>{% if rmm_state.provider %}<th>RMM</th>{% endif %}<th>Flags</th></tr>
+      {% for d in devices %}
+      <tr class="{{ '' if d.present else 'gone' }}"
+          data-present="{{ 1 if d.present else 0 }}" data-missing="{{ 1 if d.rmm and d.rmm.status == 'missing' else 0 }}"
+          data-flagged="{{ 1 if d.flags else 0 }}"
+          data-text="{{ [d.mac, d.vendor, d.hostname, d.device.label] | select | join(' ') | lower }} {{ d.ips | join(' ') }} {{ d.hostnames | join(' ') | lower }}">
+        <td><span class="hexb t-{{ d.device.type }}" title="{{ d.device.label }} -- {{ d.device.why }}">{{ d.device.code }}</span></td>
+        <td><a href="{{ url_for('device_page', mac=d.mac) }}"><span class="pres {{ 'on' if d.present else '' }}" title="{{ 'In the latest scan of its network' if d.present else 'Not in the latest scan' }}"></span>{{ d.hostname or d.vendor or 'Unknown device' }}</a>
+          <span class="sm2"><span class="mac">{{ d.mac }}</span>{% if d.hostname and d.vendor %} &middot; {{ d.vendor }}{% endif %}</span></td>
+        <td><span class="ipc">{{ d.ip }}</span>{% if d.ips | length > 1 %}<span class="sm2">{{ d.ips | length }} IPs seen</span>{% endif %}</td>
+        <td>{{ d.last_seen | when }}<span class="sm2">first {{ d.first_seen | when }} &middot; {{ d.sightings }}&times;</span></td>
+        <td class="ports">{% for p, pr in d.open_ports[:8] %}{{ p }}{{ ', ' if not loop.last }}{% endfor %}{% if d.open_ports | length > 8 %} +{{ d.open_ports | length - 8 }}{% endif %}</td>
+        {% if rmm_state.provider %}<td>{% if d.rmm %}<span class="rm {{ d.rmm.status }}">{{ {'managed': 'Managed', 'missing': 'Missing', 'na': 'No agent expected'}[d.rmm.status] }}</span>{% if d.rmm.device %}<span class="sm2">{{ d.rmm.device.site }}</span>{% endif %}{% else %}<span class="rm na">Not synced</span>{% endif %}</td>{% endif %}
+        <td>{% for f in d.flags %}<span class="flag {{ f.level }}" title="{{ f.detail }}">{{ f.label }}</span>{% endfor %}</td>
+      </tr>
+      {% endfor %}
+    </table>
+    </div>
+    <div class="hint">Devices are identified by MAC address, so they keep their history when DHCP hands out new IPs.
+      {% if untracked %}{{ untracked }} address{{ 'es' if untracked != 1 }} seen without a MAC (this unit, or hosts behind a router) can't be tracked this way.{% endif %}</div>
+    {% else %}
+      <div class="empty">No devices yet &mdash; run a scan, or import an earlier export.</div>
+    {% endif %}
+  </section>
+
+  <div>
+    <section class="panel">
+      <div class="panel-head"><h2>Import history</h2></div>
+      <p class="hint" style="margin-top:0">Add scans exported from this or another Aliana (<b>All history</b> or a single
+        scan's <b>JSON</b>). Scans already here are skipped, so importing the same file twice is safe.</p>
+      <div class="imp">
+        <input type="file" id="imp-files" accept=".json,application/json" multiple>
+        <button type="button" id="imp-go">Import</button>
+      </div>
+      <div class="imp-result" id="imp-result"></div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head"><h2>Export</h2></div>
+      <div class="exports">
+        <a href="{{ url_for('export_history') }}" title="Every scan, importable on another day or unit">All history (JSON)</a>
+        <a href="{{ url_for('export_devices') }}" title="This inventory as a spreadsheet">Devices (CSV)</a>
+      </div>
+      <p class="hint">Typical routine: scan, then <b>All history</b> to save the file. Next visit, import it first, scan
+        again &mdash; the dashboard then shows what changed since last time, and each device keeps its timeline.</p>
+    </section>
+
+    {% if rmm_state.provider %}
+    <section class="panel">
+      <div class="panel-head"><h2>{{ rmm_state.label }}</h2></div>
+      <div class="kv">Last sync <b id="rmm-last">{{ rmm_state.status.last_sync | when if rmm_state.status.last_sync else 'never' }}</b></div>
+      <div class="kv" style="margin-top:6px">Devices in RMM <b>{{ rmm_state.device_count }}</b></div>
+      {% if rmm_state.status.error %}<div class="msg show" style="margin:10px 0 0">{{ rmm_state.status.error }}</div>{% endif %}
+      <div style="margin-top:12px"><button type="button" class="ghost sm" id="rmm-sync">Sync now</button></div>
+    </section>
+    {% endif %}
+  </div>
+</div>
+
+</div>
+<script>
+(function () {
+  var $ = function (id) { return document.getElementById(id); };
+  var filter = "all";
+  function apply() {
+    var q = $("q").value.trim().toLowerCase(), n = 0, rows = document.querySelectorAll("table.devs tr[data-text]");
+    rows.forEach(function (r) {
+      var ok = (!q || r.getAttribute("data-text").indexOf(q) >= 0) &&
+        (filter === "all" || (filter === "present" && r.getAttribute("data-present") === "1") ||
+         (filter === "gone" && r.getAttribute("data-present") === "0") ||
+         (filter === "missing" && r.getAttribute("data-missing") === "1") ||
+         (filter === "flagged" && r.getAttribute("data-flagged") === "1"));
+      r.style.display = ok ? "" : "none";
+      if (ok) n++;
+    });
+    $("shown").innerHTML = rows.length ? "Showing <b>" + n + "</b> of " + rows.length : "";
+  }
+  $("q").addEventListener("input", apply);
+  document.querySelectorAll(".chipf").forEach(function (b) {
+    b.addEventListener("click", function () {
+      filter = b.getAttribute("data-f");
+      document.querySelectorAll(".chipf").forEach(function (x) { x.className = "chipf" + (x === b ? " on" : ""); });
+      apply();
+    });
+  });
+  apply();
+
+  $("imp-go").addEventListener("click", function () {
+    var files = $("imp-files").files, out = $("imp-result");
+    if (!files.length) { out.innerHTML = '<span class="err">Choose one or more .json files first.</span>'; return; }
+    var fd = new FormData();
+    for (var i = 0; i < files.length; i++) fd.append("files", files[i]);
+    $("imp-go").disabled = true;
+    out.textContent = "Importing…";
+    fetch("/api/import", { method: "POST", body: fd })
+      .then(function (r) { return r.json().catch(function () { return { ok: false, errors: ["Upload failed (file too big?)"] }; }); })
+      .then(function (d) {
+        $("imp-go").disabled = false;
+        var html = "";
+        if (d.scans_added != null) {
+          html = "<b>" + d.scans_added + " scan" + (d.scans_added === 1 ? "" : "s") + " added</b>" +
+            (d.scans_skipped ? " &middot; " + d.scans_skipped + " already here" : "") +
+            " &middot; " + d.new_devices + " new device" + (d.new_devices === 1 ? "" : "s");
+        }
+        (d.errors || []).forEach(function (e) { html += '<span class="err">' + e.replace(/[<>&]/g, "") + "</span>"; });
+        if (d.error) html += '<span class="err">' + d.error + "</span>";
+        out.innerHTML = html;
+        if (d.scans_added) setTimeout(function () { location.reload(); }, 1500);
+      })
+      .catch(function () { $("imp-go").disabled = false; out.innerHTML = '<span class="err">Upload failed.</span>'; });
+  });
+
+  var sb = $("rmm-sync");
+  if (sb) sb.addEventListener("click", function () {
+    sb.disabled = true; sb.textContent = "Syncing…";
+    fetch("/api/rmm/sync", { method: "POST" }).then(function () {
+      var t = setInterval(function () {
+        fetch("/api/rmm", { cache: "no-store" }).then(function (r) { return r.json(); }).then(function (s) {
+          if (!s.status.syncing) { clearInterval(t); location.reload(); }
+        });
+      }, 1500);
+    });
+  });
+})();
+</script>
+</body>
+</html>

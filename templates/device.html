@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Aliana &middot; {{ d.hostname or d.mac }}</title>
+<style>
+{% include "_theme.css.html" %}
+  .who { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; margin-bottom: 14px; }
+  .hexb {
+    width: 58px; height: 50px; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0;
+    background: var(--accent); color: #000; font-size: 0.9rem; letter-spacing: 0.06em;
+    clip-path: polygon(25% 0, 75% 0, 100% 50%, 75% 100%, 25% 100%, 0 50%);
+  }
+  .hexb.t-access, .hexb.t-camera { background: var(--red); }
+  .hexb.t-network { background: var(--cyan); }
+  .hexb.t-unknown { background: var(--border); color: var(--text); }
+  .who .name { font-family: var(--title); font-size: 2.2rem; line-height: 1; color: var(--accent); }
+  .who .mac { font-family: var(--mono); color: var(--text); letter-spacing: 0; }
+  .who .sub { color: var(--muted); font-size: 0.85rem; letter-spacing: 0.05em; margin-top: 4px; }
+  .state { font-family: var(--title); font-size: 1.2rem; text-transform: uppercase; margin-left: auto; }
+  .state.on { color: var(--green); } .state.off { color: var(--muted); }
+  dl { display: grid; grid-template-columns: 150px 1fr; gap: 7px 14px; margin: 0; font-size: 0.9rem; }
+  dt { color: var(--muted); font-size: 0.72rem; letter-spacing: 0.12em; text-transform: uppercase; padding-top: 3px; }
+  dd { margin: 0; color: var(--text); }
+  .mono { font-family: var(--mono); font-size: 0.85rem; letter-spacing: 0; }
+  .muted2 { color: var(--muted); }
+  .flag { display: inline-block; font-size: 0.68rem; letter-spacing: 0.1em; text-transform: uppercase; padding: 2px 7px 1px; margin: 0 4px 4px 0; }
+  .flag.high { background: var(--red); color: #000; }
+  .flag.medium { color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+  .flag.low { color: var(--muted); box-shadow: inset 0 0 0 1px var(--border); }
+  .rmmok { color: var(--green); } .rmmbad { color: var(--red); }
+  .rmmok a { color: var(--green); }
+  /* timeline */
+  .tl { position: relative; padding-left: 22px; }
+  .tl::before { content: ""; position: absolute; left: 6px; top: 6px; bottom: 6px; width: 2px; background: var(--border); }
+  .ev { position: relative; padding: 0 0 16px; }
+  .ev::before {
+    content: ""; position: absolute; left: -22px; top: 3px; width: 14px; height: 12px; background: var(--accent);
+    clip-path: polygon(25% 0, 75% 0, 100% 50%, 75% 100%, 25% 100%, 0 50%);
+  }
+  .ev.chg::before { background: var(--red); }
+  .ev .top { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 12px; }
+  .ev .t { font-family: var(--title); font-size: 1.2rem; line-height: 1; }
+  .ev .t a { color: var(--text); text-decoration: none; }
+  .ev .t a:hover { color: var(--accent); }
+  .ev .ip { font-family: var(--mono); color: var(--accent); font-size: 0.88rem; }
+  .ev .ip.changed { color: var(--cyan); }
+  .ev .meta { color: var(--muted); font-size: 0.78rem; letter-spacing: 0.05em; margin-top: 4px; }
+  .ev .ports { font-family: var(--mono); font-size: 0.78rem; color: var(--green); margin-top: 4px; letter-spacing: 0; }
+  .ev .ports .none { color: var(--muted); font-family: var(--sans); letter-spacing: 0.05em; }
+  .ev .delta { margin-top: 4px; font-size: 0.78rem; letter-spacing: 0.06em; }
+  .ev .delta .o { color: var(--red); } .ev .delta .c { color: var(--muted); }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>
+    <svg viewBox="0 0 120 100" xmlns="http://www.w3.org/2000/svg" fill="currentColor" aria-hidden="true">
+      <path d="M30 70 L10 85 L35 78 Z"/>
+      <ellipse cx="55" cy="60" rx="22" ry="14" transform="rotate(-10 55 60)"/>
+      <path d="M50 50 C40 20, 70 15, 85 35 C70 30, 55 35, 50 50 Z"/>
+      <circle cx="82" cy="45" r="11"/>
+      <path d="M92 45 L104 42 L92 50 Z"/>
+      <path d="M60 72 L58 88 M68 73 L70 89" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"/>
+    </svg>
+    Aliana <small>device history</small>
+  </h1>
+  <nav class="nav"><a href="/">Dashboard</a><a href="/queue">Queue</a><a href="/devices" class="on">Devices</a><a href="/settings">Settings</a><a href="/wifi">Wi-Fi</a></nav>
+</header>
+
+<div class="grid" style="grid-template-columns:420px minmax(0,1fr)">
+  <section class="panel">
+    <div class="who">
+      <span class="hexb t-{{ d.device.type }}" title="{{ d.device.why }}">{{ d.device.code }}</span>
+      <div>
+        <div class="name">{{ d.hostname or d.vendor or 'Unknown device' }}</div>
+        <div class="sub"><span class="mac">{{ d.mac }}</span>{% if d.vendor %} &middot; {{ d.vendor }}{% endif %}</div>
+      </div>
+      <span class="state {{ 'on' if d.present else 'off' }}">{{ 'Online' if d.present else 'Not seen lately' }}</span>
+    </div>
+    <dl>
+      <dt>Type</dt><dd>{{ d.device.label }} <span class="muted2">({{ d.device.why }})</span></dd>
+      <dt>Last IP</dt><dd class="mono">{{ d.ip }}</dd>
+      {% if d.ips | length > 1 %}<dt>IPs seen</dt><dd class="mono">{{ d.ips | join(', ') }}</dd>{% endif %}
+      {% if d.hostnames %}<dt>Names seen</dt><dd>{{ d.hostnames | join(', ') }}</dd>{% endif %}
+      <dt>Networks</dt><dd class="mono">{{ d.networks | join(', ') or '–' }}</dd>
+      <dt>First seen</dt><dd>{{ d.first_seen | when }} <span class="muted2">({{ d.first_seen | ago }})</span></dd>
+      <dt>Last seen</dt><dd>{{ d.last_seen | when }} <span class="muted2">({{ d.last_seen | ago }})</span></dd>
+      <dt>Times seen</dt><dd>{{ d.sightings }}</dd>
+      {% if d.os_name %}<dt>OS guess</dt><dd>{{ d.os_name }}</dd>{% endif %}
+      <dt>Open ports</dt><dd class="mono">{% for p, pr in d.open_ports %}{{ p }}/{{ pr }}{{ ', ' if not loop.last }}{% else %}<span class="muted2">none recorded</span>{% endfor %}</dd>
+      {% if d.flags %}<dt>Flags</dt><dd>{% for f in d.flags %}<span class="flag {{ f.level }}" title="{{ f.detail }}">{{ f.label }}</span>{% endfor %}</dd>{% endif %}
+      {% if d.rmm %}
+      <dt>{{ d.rmm.provider }}</dt>
+      <dd>
+        {% if d.rmm.status == 'managed' %}
+          <span class="rmmok">&#10003; {% if d.rmm.device.url %}<a href="{{ d.rmm.device.url }}" target="_blank" rel="noopener">{{ d.rmm.device.hostname }}</a>{% else %}{{ d.rmm.device.hostname }}{% endif %}</span>
+          <span class="muted2">&middot; {{ d.rmm.device.site }} &middot; matched by {{ d.rmm.by }}</span><br>
+          <span class="muted2">{{ d.rmm.device.os or '' }}{% if d.rmm.device.online is not none %} &middot; {{ 'online' if d.rmm.device.online else 'offline' }} in RMM{% endif %}{% if d.rmm.device.last_seen %} &middot; RMM last seen {{ d.rmm.device.last_seen | when }}{% endif %}</span>
+        {% elif d.rmm.status == 'missing' %}
+          <span class="rmmbad">Not in {{ d.rmm.provider }}</span> <span class="muted2">&middot; looks like a computer</span>
+        {% else %}
+          <span class="muted2">Not in {{ d.rmm.provider }} &middot; no agent expected for this type</span>
+        {% endif %}
+      </dd>
+      {% endif %}
+    </dl>
+  </section>
+
+  <section class="panel">
+    <div class="panel-head"><h2>Timeline</h2><span class="kv">{{ timeline | length }} sighting{{ 's' if timeline | length != 1 }}</span></div>
+    <div class="tl">
+      {% for e in timeline %}
+      <div class="ev {{ 'chg' if e.opened or e.closed or e.ip_changed else '' }}">
+        <div class="top">
+          <span class="t"><a href="{{ url_for('view_scan', scan_id=e.scan_id) }}">{{ e.finished_at | when }}</a></span>
+          <span class="ip {{ 'changed' if e.ip_changed else '' }}" title="{{ 'IP changed from the previous sighting' if e.ip_changed else '' }}">{{ e.ip }}</span>
+          {% if e.profile in profiles %}<span class="tag {{ e.profile }}">{{ profiles[e.profile].label }}</span>{% endif %}
+          {% if e.scope == 'host' %}<span class="tag outline">Host scan</span>{% endif %}
+          {% if e.source == 'import' %}<span class="tag outline" title="Imported from an export">Imported{% if e.node %} &middot; {{ e.node }}{% endif %}</span>{% endif %}
+        </div>
+        <div class="meta">{{ e.subnet }}{% if e.hostname %} &middot; {{ e.hostname }}{% endif %}{% if e.os_name %} &middot; {{ e.os_name }}{% endif %}</div>
+        {% if e.port_check %}
+        <div class="ports">{% for p in e.ports %}{{ p.port }}{% if p.service %}/{{ p.service }}{% endif %}{{ ', ' if not loop.last }}{% else %}<span class="none">No open ports in the range checked</span>{% endfor %}</div>
+        {% else %}
+        <div class="ports"><span class="none">Discovery scan &middot; ports not checked</span></div>
+        {% endif %}
+        {% if e.opened or e.closed %}
+        <div class="delta">
+          {% if e.opened %}<span class="o">Opened {% for p, pr in e.opened %}{{ p }}{{ ', ' if not loop.last }}{% endfor %}</span>{% endif %}
+          {% if e.opened and e.closed %} &middot; {% endif %}
+          {% if e.closed %}<span class="c">Closed {% for p, pr in e.closed %}{{ p }}{{ ', ' if not loop.last }}{% endfor %}</span>{% endif %}
+        </div>
+        {% endif %}
+      </div>
+      {% endfor %}
+    </div>
+  </section>
+</div>
+
+</div>
+</body>
+</html>

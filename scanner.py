@@ -16,6 +16,7 @@ import re
 import pty
 import select
 import shutil
+import socket
 import json
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "aliana.db")
@@ -333,6 +334,19 @@ def init_db():
         c.execute("ALTER TABLE scans ADD COLUMN ports_checked TEXT")
     if "scope" not in cols:  # "subnet" (whole network) or "host" (one target)
         c.execute("ALTER TABLE scans ADD COLUMN scope TEXT DEFAULT 'subnet'")
+    # History import/export: a scan's uid survives export/import (so the same
+    # scan is never imported twice); source = "local" or "import"; node =
+    # the Aliana unit (hostname) that ran it.
+    for col in ("uid", "source", "node"):
+        if col not in cols:
+            c.execute(f"ALTER TABLE scans ADD COLUMN {col} TEXT")
+    for (sid,) in c.execute("SELECT id FROM scans WHERE uid IS NULL").fetchall():
+        c.execute("UPDATE scans SET uid = ?, source = COALESCE(source, 'local') WHERE id = ?",
+                  (uuid.uuid4().hex, sid))
+    c.execute("CREATE INDEX IF NOT EXISTS idx_scans_uid ON scans(uid)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_hosts_mac ON hosts(mac)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_hosts_scan ON hosts(scan_id)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_ports_host ON ports(host_id)")
     # Scan job queue (see enqueue / queue_worker)
     c.execute("""
         CREATE TABLE IF NOT EXISTS jobs (
@@ -1013,9 +1027,10 @@ def _store_results(subnet, started, finished, hosts, profile=None, mode=None, po
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute(
-        "INSERT INTO scans (started_at, finished_at, subnet, host_count, profile, mode, ports_checked, scope) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        (started, finished, subnet, len(hosts), profile, mode, ports_checked, scope),
+        "INSERT INTO scans (started_at, finished_at, subnet, host_count, profile, mode, ports_checked, scope, "
+        "uid, source, node) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'local', ?)",
+        (started, finished, subnet, len(hosts), profile, mode, ports_checked, scope,
+         uuid.uuid4().hex, socket.gethostname()),
     )
     scan_id = c.lastrowid
 
@@ -1042,6 +1057,15 @@ def _store_results(subnet, started, finished, hosts, profile=None, mode=None, po
 
 HISTORY_LOOKBACK = 50  # earlier scans consulted for "last seen" ports
 
+# Scans are ordered by when they finished, not by id: imported scans (from
+# another day's export) get new ids but can be older than local ones.
+_BEFORE = "(finished_at < ? OR (finished_at = ? AND id < ?))"
+_AFTER = "(finished_at > ? OR (finished_at = ? AND id > ?))"
+
+
+def _tkey(scan):
+    return (scan.get("finished_at") or "", scan.get("id") or 0)
+
 
 def get_latest_scan():
     return get_scan(None)
@@ -1049,7 +1073,8 @@ def get_latest_scan():
 
 def latest_subnet_scan_id():
     conn = sqlite3.connect(DB_PATH)
-    row = conn.execute("SELECT MAX(id) FROM scans WHERE COALESCE(scope, 'subnet') = 'subnet'").fetchone()
+    row = conn.execute("SELECT id FROM scans WHERE COALESCE(scope, 'subnet') = 'subnet' "
+                       "ORDER BY finished_at DESC, id DESC LIMIT 1").fetchone()
     conn.close()
     return row[0] if row else None
 
@@ -1072,7 +1097,8 @@ def get_scan(scan_id=None):
     conn.row_factory = sqlite3.Row
     c = conn.cursor()
     if scan_id is None:
-        c.execute("SELECT * FROM scans WHERE COALESCE(scope, 'subnet') = 'subnet' ORDER BY id DESC LIMIT 1")
+        c.execute("SELECT * FROM scans WHERE COALESCE(scope, 'subnet') = 'subnet' "
+                  "ORDER BY finished_at DESC, id DESC LIMIT 1")
     else:
         c.execute("SELECT * FROM scans WHERE id = ?", (scan_id,))
     scan = c.fetchone()
@@ -1102,10 +1128,13 @@ def get_scan(scan_id=None):
 
     # Per-host Deep scans run after this network scan (and before the next)
     if scan["scope"] == "subnet":
-        nxt = c.execute("SELECT MIN(id) FROM scans WHERE id > ? AND COALESCE(scope, 'subnet') = 'subnet'",
-                        (scan["id"],)).fetchone()[0]
-        c.execute("SELECT * FROM scans WHERE scope = 'host' AND id > ? AND id < ? ORDER BY id DESC",
-                  (scan["id"], nxt if nxt is not None else 2 ** 62))
+        # (time order, not id order: imported scans can be older than local ones)
+        nxt = c.execute("SELECT finished_at FROM scans WHERE COALESCE(scope, 'subnet') = 'subnet' AND "
+                        + _AFTER + " ORDER BY finished_at, id LIMIT 1",
+                        (scan["finished_at"], scan["finished_at"], scan["id"])).fetchone()
+        c.execute("SELECT * FROM scans WHERE scope = 'host' AND " + _AFTER +
+                  " AND finished_at < ? ORDER BY finished_at DESC, id DESC",
+                  (scan["finished_at"], scan["finished_at"], scan["id"], nxt[0] if nxt else "9999"))
         host_scans = [dict(r) for r in c.fetchall()]
         if host_scans:
             by_key = {}
@@ -1126,9 +1155,10 @@ def get_scan(scan_id=None):
                             card[k] = hh[k]
 
     # Earlier scans (network and host), newest first, with each host's open ports
-    top = max(h["shown_scan"]["id"] for h in hosts) if hosts else scan["id"]
-    c.execute("SELECT id, finished_at, profile, ports_checked FROM scans WHERE id < ? "
-              "ORDER BY id DESC LIMIT ?", (top, HISTORY_LOOKBACK))
+    top = max((h["shown_scan"] for h in hosts), key=_tkey) if hosts else scan
+    c.execute("SELECT id, finished_at, profile, ports_checked FROM scans WHERE " + _BEFORE +
+              " ORDER BY finished_at DESC, id DESC LIMIT ?",
+              (top["finished_at"], top["finished_at"], top["id"], HISTORY_LOOKBACK))
     earlier_scans = [dict(r) for r in c.fetchall()]
     by_scan = {}
     if earlier_scans:
@@ -1164,7 +1194,7 @@ def get_scan(scan_id=None):
         decided = set()      # ports whose most recent earlier check we've already used
         earlier = []
         for es in earlier_scans:   # newest first
-            if es["id"] >= shown["id"]:
+            if _tkey(es) >= _tkey(shown):
                 continue
             seen = by_scan.get(es["id"], {})
             ports = seen.get(key) if key in seen else seen.get(("ip", host["ip"]))
@@ -1196,7 +1226,7 @@ def get_scan_history(limit=20):
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     c = conn.cursor()
-    c.execute("SELECT * FROM scans ORDER BY id DESC LIMIT ?", (limit,))
+    c.execute("SELECT * FROM scans ORDER BY finished_at DESC, id DESC LIMIT ?", (limit,))
     rows = [dict(r) for r in c.fetchall()]
     conn.close()
     return rows
@@ -1400,6 +1430,11 @@ def _subnet_job_pending():
     return n > 0
 
 
+# Called with the finished job (dict) after every job; e.g. the RMM sync
+# hooks in here from app.py. Errors in hooks are logged, never fatal.
+on_job_done = []
+
+
 def queue_worker():
     """Runs queued jobs one at a time, forever. Call in a daemon thread."""
     global _current_job
@@ -1442,6 +1477,12 @@ def queue_worker():
                  _last_scan_status.get("last_error") if status == "failed" else None, job["id"]))
             conn.commit()
             conn.close()
+            job.update(status=status, scan_id=scan_id)
+            for hook in on_job_done:
+                try:
+                    hook(job)
+                except Exception:
+                    traceback.print_exc()
         except Exception:
             traceback.print_exc()
             time.sleep(5)
@@ -1464,7 +1505,7 @@ def get_latest_summary():
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute("SELECT id, finished_at, subnet, host_count, profile FROM scans "
-              "WHERE COALESCE(scope, 'subnet') = 'subnet' ORDER BY id DESC LIMIT 1")
+              "WHERE COALESCE(scope, 'subnet') = 'subnet' ORDER BY finished_at DESC, id DESC LIMIT 1")
     row = c.fetchone()
     if not row:
         conn.close()
