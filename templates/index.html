@@ -265,6 +265,11 @@
   .changes li b.new { color: var(--cyan); }
   .changes li b.gone { color: var(--accent); }
   .changes li b.opened { color: var(--red); }
+  .changes li a { color: var(--text); text-decoration: none; border-bottom: 1px dotted var(--border); }
+  .changes li a:hover { color: var(--accent); border-bottom-color: var(--accent); }
+  .host { scroll-margin-top: 20px; }
+  .host:target { animation: hostflash 1.6s ease-out 1; }
+  @keyframes hostflash { 0%, 40% { box-shadow: 0 0 0 2px var(--accent), 0 0 18px rgba(255, 122, 0, 0.5); } 100% { box-shadow: none; } }
   .ch-note { padding: 0 12px 10px 54px; font-size: 0.75rem; color: var(--muted); letter-spacing: 0.05em; }
   .no-changes { margin: -6px 0 16px; font-size: 0.8rem; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); }
   /* Device type badge */
@@ -643,10 +648,11 @@
             <a class="ch-prev" href="{{ url_for('view_scan', scan_id=ch.previous.id) }}">previous scan</a>
           </summary>
           <ul>
-            {% for h in ch.new_hosts %}<li><b class="new">NEW</b> {{ h.ip }}{% if h.hostname %} &middot; {{ h.hostname }}{% endif %}{% if h.vendor %} &middot; {{ h.vendor }}{% endif %}</li>{% endfor %}
-            {% for h in ch.missing_hosts %}<li><b class="gone">GONE</b> {{ h.ip }}{% if h.hostname %} &middot; {{ h.hostname }}{% endif %}{% if h.vendor %} &middot; {{ h.vendor }}{% endif %}</li>{% endfor %}
-            {% for o in ch.opened %}<li><b class="opened">OPENED</b> {{ o.ip }} &middot; {{ o.port }}/{{ o.protocol }}</li>{% endfor %}
-            {% for o in ch.closed %}<li><b>CLOSED</b> {{ o.ip }} &middot; {{ o.port }}/{{ o.protocol }}</li>{% endfor %}
+            {# New / gone devices open their history (by MAC); without a MAC, new ones jump to their card and gone ones open the previous scan. Port changes jump to the card. #}
+            {% for h in ch.new_hosts %}<li><b class="new">NEW</b> <a href="{{ url_for('device_page', mac=h.mac) if h.mac else '#host-' ~ (h.ip | replace('.', '-')) }}" title="{{ 'Open this device' if h.mac else 'Show its card' }}">{{ h.ip }}{% if h.hostname %} &middot; {{ h.hostname }}{% endif %}{% if h.vendor %} &middot; {{ h.vendor }}{% endif %}</a></li>{% endfor %}
+            {% for h in ch.missing_hosts %}<li><b class="gone">GONE</b> <a href="{{ url_for('device_page', mac=h.mac) if h.mac else url_for('view_scan', scan_id=ch.previous.id) }}" title="{{ "Open this device’s history" if h.mac else 'Open the previous scan' }}">{{ h.ip }}{% if h.hostname %} &middot; {{ h.hostname }}{% endif %}{% if h.vendor %} &middot; {{ h.vendor }}{% endif %}</a></li>{% endfor %}
+            {% for o in ch.opened %}<li><b class="opened">OPENED</b> <a href="#host-{{ o.ip | replace('.', '-') }}" title="Show its card">{{ o.ip }} &middot; {{ o.port }}/{{ o.protocol }}</a></li>{% endfor %}
+            {% for o in ch.closed %}<li><b>CLOSED</b> <a href="#host-{{ o.ip | replace('.', '-') }}" title="Show its card">{{ o.ip }} &middot; {{ o.port }}/{{ o.protocol }}</a></li>{% endfor %}
           </ul>
           {% if not ch.ports_compared %}<div class="ch-note">Ports not compared: the previous scan didn't check the same ports.</div>{% endif %}
         </details>
@@ -659,7 +665,7 @@
         <div class="hosts">
         {% for host in scan.hosts %}
           {% set open_ports = host.ports | selectattr('state', 'equalto', 'open') | list %}
-          <div class="host">
+          <div class="host" id="host-{{ host.ip | replace('.', '-') }}">
             <div class="host-top">
               <span class="hexb t-{{ host.device.type }} c-{{ host.device.confidence }}" title="{{ host.device.label }} ({{ host.device.confidence }} confidence){% for e in host.device.evidence %}&#10;&middot; {{ e.why }}{% endfor %}">{{ host.device.code }}</span>
               <span class="ip">{{ host.ip }}</span>
