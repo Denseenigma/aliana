@@ -268,7 +268,38 @@
   .changes li a { color: var(--text); text-decoration: none; border-bottom: 1px dotted var(--border); }
   .changes li a:hover { color: var(--accent); border-bottom-color: var(--accent); }
   .host { scroll-margin-top: 20px; }
-  .host:target { animation: hostflash 1.6s ease-out 1; }
+  .host.linked { cursor: pointer; transition: border-color 0.15s, background 0.15s; }
+  .host.linked:hover { border-color: var(--accent); background: #0b0603; }
+  /* Deep scan results tray (fixed, bottom-right) */
+  .deeptray { position: fixed; right: 16px; bottom: 16px; z-index: 60; width: 360px; max-width: calc(100vw - 32px);
+              background: #000; border: 1px solid var(--red); box-shadow: 0 0 24px rgba(255, 38, 38, 0.25);
+              clip-path: polygon(0 0, calc(100% - 14px) 0, 100% 14px, 100% 100%, 0 100%); }
+  .deeptray.min .dt-body { display: none; }
+  .dt-head { display: flex; align-items: center; justify-content: space-between; background: var(--red); padding: 3px 4px 2px 10px; cursor: pointer; }
+  .dt-title { color: #000; font-size: 0.8rem; letter-spacing: 0.16em; text-transform: uppercase; }
+  .dt-x { background: transparent; color: inherit; clip-path: none; padding: 0 8px; font-family: var(--sans); font-size: 1rem; line-height: 1.2; }
+  .dt-head .dt-x { color: #000; }
+  .dt-head .dt-x:hover { background: rgba(0, 0, 0, 0.2); }
+  .dt-body { max-height: 60vh; overflow-y: auto; }
+  .dt-item { position: relative; padding: 10px 12px; border-bottom: 1px solid rgba(107, 50, 0, 0.6); }
+  .dt-item:last-child { border-bottom: none; }
+  .dt-item .dt-dismiss { position: absolute; top: 4px; right: 2px; color: var(--muted); }
+  .dt-item .dt-dismiss:hover { color: var(--accent); background: transparent; }
+  .dt-row { display: flex; align-items: center; gap: 8px; padding-right: 22px; flex-wrap: wrap; }
+  .dt-ip { font-family: var(--title); font-size: 1.25rem; line-height: 1; color: var(--accent); }
+  .dt-name { color: var(--text); font-size: 0.85rem; }
+  .dt-state { font-size: 0.72rem; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); }
+  .dt-state.run { color: var(--red); animation: stopflash 1.2s steps(1) infinite; }
+  .dt-sum { margin-top: 5px; font-size: 0.82rem; color: var(--muted); letter-spacing: 0.03em; }
+  .dt-sum b { color: var(--green); font-weight: inherit; }
+  .dt-sum .bad { color: var(--red); }
+  .dt-flags { margin-top: 4px; display: flex; flex-wrap: wrap; gap: 3px; }
+  .dt-links { margin-top: 6px; display: flex; gap: 12px; align-items: baseline; font-size: 0.75rem; letter-spacing: 0.1em; text-transform: uppercase; }
+  .dt-when { color: var(--muted); margin-right: auto; }
+  .dt-link { color: var(--accent); text-decoration: none; }
+  .dt-link:hover { text-decoration: underline; }
+  .hexb.small { width: 26px; height: 22px; font-size: 0.55rem; }
+  .host:target, .host.flash { animation: hostflash 1.6s ease-out 1; }
   @keyframes hostflash { 0%, 40% { box-shadow: 0 0 0 2px var(--accent), 0 0 18px rgba(255, 122, 0, 0.5); } 100% { box-shadow: none; } }
   .ch-note { padding: 0 12px 10px 54px; font-size: 0.75rem; color: var(--muted); letter-spacing: 0.05em; }
   .no-changes { margin: -6px 0 16px; font-size: 0.8rem; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); }
@@ -665,7 +696,8 @@
         <div class="hosts">
         {% for host in scan.hosts %}
           {% set open_ports = host.ports | selectattr('state', 'equalto', 'open') | list %}
-          <div class="host" id="host-{{ host.ip | replace('.', '-') }}">
+          <div class="host {{ 'linked' if host.mac else '' }}" id="host-{{ host.ip | replace('.', '-') }}"
+               {% if host.mac %}data-href="{{ url_for('device_page', mac=host.mac) }}" title="Open this device's history"{% endif %}>
             <div class="host-top">
               <span class="hexb t-{{ host.device.type }} c-{{ host.device.confidence }}" title="{{ host.device.label }} ({{ host.device.confidence }} confidence){% for e in host.device.evidence %}&#10;&middot; {{ e.why }}{% endfor %}">{{ host.device.code }}</span>
               <span class="ip">{{ host.ip }}</span>
@@ -687,7 +719,6 @@
               {% elif host.mac %}{% if host.vendor %}{{ host.vendor }} &middot; {% endif %}<span class="mac">{{ host.mac }}</span>
               {% else %}<span class="mac">MAC &ndash;</span>{% endif %}
               &middot; <span class="dtype" title="{% for e in host.device.evidence %}{{ e.why }}&#10;{% endfor %}">{{ host.device.label }}</span>
-              {% if host.mac %}&middot; <a class="hist" href="{{ url_for('device_page', mac=host.mac) }}" title="This device's history">history</a>{% endif %}
             </div>
             {% set idn = host.ident or {} %}
             {% if host.device.model or idn.sources or idn.private_mac %}
@@ -1023,6 +1054,128 @@
     if (location.hash === "#screen") open(); else close();
   });
   if (location.hash === "#screen") open();
+})();
+</script>
+
+{# ---- Deep scan results tray: follows you while you scroll ---- #}
+{% if deep.active or deep.done %}
+<aside class="deeptray" id="deeptray" aria-label="Deep scan results">
+  <div class="dt-head"><span class="dt-title">Deep scans</span><button type="button" class="dt-x" id="dt-min" title="Minimise">&#8211;</button></div>
+  <div class="dt-body">
+  {% for a in deep.active %}
+    <div class="dt-item dt-active" data-job="{{ a.id }}">
+      <div class="dt-row"><span class="dt-ip">{{ a.ip }}</span>
+        {% if a.state == 'running' %}<span class="dt-state run">Scanning<span class="dt-phase" data-phase>{% if a.progress %} &middot; {{ a.progress.phase }}{% if a.progress.percent %} {{ a.progress.percent | round | int }}%{% endif %}{% endif %}</span></span>
+        {% else %}<span class="dt-state">Queued #{{ a.position }}</span>{% endif %}</div>
+      {% if a.ip | replace('.', '-') %}<a class="dt-link" href="#host-{{ a.ip | replace('.', '-') }}" data-card="host-{{ a.ip | replace('.', '-') }}">Show card</a>{% endif %}
+    </div>
+  {% endfor %}
+  {% for d in deep.done %}
+    <div class="dt-item dt-{{ d.state }}" data-job="{{ d.id }}">
+      <button type="button" class="dt-x dt-dismiss" title="Dismiss">&times;</button>
+      <div class="dt-row">
+        {% if d.device %}<span class="hexb small t-{{ d.device.type }}">{{ d.device.code }}</span>{% endif %}
+        <span class="dt-ip">{{ d.ip }}</span>{% if d.name %}<span class="dt-name">{{ d.name }}</span>{% endif %}
+      </div>
+      <div class="dt-sum">
+        {% if d.state == 'failed' %}<span class="bad">Failed{% if d.error %} &middot; {{ d.error[:80] }}{% endif %}</span>
+        {% elif d.no_response %}<span class="bad">No response &mdash; device offline or not answering</span>
+        {% else %}
+          {% if d.state == 'stopped' %}<span class="bad">Stopped early &middot; </span>{% endif %}
+          {% if d.device %}{{ d.device.label }}{% if d.device.model %} &middot; {{ d.device.model }}{% endif %} &middot; {% endif %}
+          <b>{{ d.open | length }}</b> open port{{ 's' if d.open | length != 1 }}{% if d.os %} &middot; {{ d.os }}{% endif %}
+          {% if d.flags %}<div class="dt-flags">{% for f in d.flags %}<span class="flag {{ f.level }}">{{ f.label }}</span>{% endfor %}</div>{% endif %}
+        {% endif %}
+      </div>
+      <div class="dt-links">
+        <span class="dt-when">{{ d.finished_at | when }}</span>
+        {% if d.card %}<a class="dt-link" href="#host-{{ d.ip | replace('.', '-') }}" data-card="host-{{ d.ip | replace('.', '-') }}">Show card</a>
+        {% elif d.scan_id %}<a class="dt-link" href="{{ url_for('view_scan', scan_id=d.scan_id) }}">View results</a>{% endif %}
+        {% if d.mac %}<a class="dt-link" href="{{ url_for('device_page', mac=d.mac) }}">History</a>{% endif %}
+      </div>
+    </div>
+  {% endfor %}
+  </div>
+</aside>
+{% endif %}
+
+<script>
+// Whole host card opens the device's history (buttons/links inside keep their own action)
+(function () {
+  document.querySelectorAll(".host[data-href]").forEach(function (card) {
+    card.addEventListener("click", function (e) {
+      if (e.target.closest("a, button, input, select, label, form")) return;
+      if (window.getSelection && String(window.getSelection())) return;   // selecting text
+      if (e.ctrlKey || e.metaKey) window.open(card.getAttribute("data-href"), "_blank");
+      else location.href = card.getAttribute("data-href");
+    });
+  });
+})();
+
+// Keep the scroll position when the dashboard refreshes itself (scan started/finished)
+(function () {
+  var KEY = "aliana.scroll";
+  window.addEventListener("beforeunload", function () {
+    try { sessionStorage.setItem(KEY, JSON.stringify({ path: location.pathname, y: window.scrollY, t: Date.now() })); } catch (e) {}
+  });
+  try {
+    var v = JSON.parse(sessionStorage.getItem(KEY) || "null");
+    if (v && v.path === location.pathname && !location.hash && Date.now() - v.t < 30000) {
+      window.addEventListener("load", function () { window.scrollTo(0, v.y); });
+    }
+  } catch (e) {}
+})();
+
+// Deep scan results tray
+(function () {
+  var tray = document.getElementById("deeptray");
+  if (!tray) return;
+  var KEY = "aliana.deepDismissed", MINK = "aliana.deepTrayMin";
+  var dismissed = [];
+  try { dismissed = JSON.parse(localStorage.getItem(KEY) || "[]"); } catch (e) {}
+  function save() { try { localStorage.setItem(KEY, JSON.stringify(dismissed.slice(-50))); } catch (e) {} }
+  function refresh() {
+    var left = tray.querySelectorAll(".dt-item:not([hidden])").length;
+    tray.hidden = !left;
+  }
+  tray.querySelectorAll(".dt-item[data-job]").forEach(function (it) {
+    if (!it.classList.contains("dt-active") && dismissed.indexOf(+it.getAttribute("data-job")) >= 0) it.hidden = true;
+  });
+  tray.addEventListener("click", function (e) {
+    var x = e.target.closest(".dt-dismiss");
+    if (x) {
+      var it = x.closest(".dt-item");
+      dismissed.push(+it.getAttribute("data-job")); save();
+      it.hidden = true; refresh();
+      return;
+    }
+    var link = e.target.closest("[data-card]");
+    if (link) {
+      var card = document.getElementById(link.getAttribute("data-card"));
+      if (card) {
+        e.preventDefault();
+        history.replaceState(null, "", "#" + card.id);
+        card.scrollIntoView({ behavior: "smooth", block: "center" });
+        card.style.animation = "none"; void card.offsetWidth; card.style.animation = "";
+        card.classList.remove("flash"); void card.offsetWidth; card.classList.add("flash");
+      }
+      return;
+    }
+    if (e.target.closest(".dt-head")) {
+      tray.classList.toggle("min");
+      try { localStorage.setItem(MINK, tray.classList.contains("min") ? "1" : "0"); } catch (err) {}
+    }
+  });
+  try { if (localStorage.getItem(MINK) === "1") tray.classList.add("min"); } catch (e) {}
+  refresh();
+  // Live phase / % for a running Deep scan
+  var phase = tray.querySelector("[data-phase]");
+  if (phase) setInterval(function () {
+    fetch("/api/queue", { cache: "no-store" }).then(function (r) { return r.json(); }).then(function (q) {
+      var r = q.running, p = r && r.progress;
+      if (r && r.kind === "host" && p) phase.textContent = " · " + p.phase + (p.percent != null ? " " + Math.round(p.percent) + "%" : "");
+    }).catch(function () {});
+  }, 2000);
 })();
 </script>
 </body>

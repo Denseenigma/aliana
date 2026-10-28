@@ -78,9 +78,11 @@ def _dashboard(scan_id):
     status = scanner.get_status()
     history = scanner.get_scan_history(limit=10)
     interfaces = scanner.list_interfaces()
+    card_ips = {h["ip"] for h in (scan or {}).get("hosts", [])} if not viewing_old else set()
     return render_template(
         "index.html", scan=scan, status=status, history=history, interfaces=interfaces,
         viewing_old=viewing_old,
+        deep=_deep_tray(card_ips),
         ask_guard=request.args.get("guard") == "1",
         flash_error=request.args.get("err"),
         excluded={h["ip"]: scanner.is_excluded(h["ip"]) for h in (scan or {}).get("hosts", [])},
@@ -89,6 +91,41 @@ def _dashboard(scan_id):
         intervals=[(sec, _interval_label(sec)) for sec in scanner.INTERVAL_CHOICES],
         own_ips={i["ipv4"].split("/")[0] for i in interfaces if i["ipv4"]},
     )
+
+
+def _deep_tray(card_ips):
+    """Per-device Deep scans for the floating results tray: ones running or
+    waiting, and ones finished in the last few hours (with a summary of what
+    they found). "card" says whether that device has a card on this page."""
+    q = scanner.get_queue(recent=0)
+    active = []
+    if q["running"] and q["running"]["kind"] == "host":
+        active.append({"id": q["running"]["id"], "ip": q["running"]["target"], "state": "running",
+                       "progress": q["running"].get("progress")})
+    for j in q["queued"]:
+        if j["kind"] == "host":
+            active.append({"id": j["id"], "ip": j["target"], "state": "queued", "position": j["position"]})
+    done = []
+    for j in scanner.recent_host_jobs():
+        item = {"id": j["id"], "ip": j["target"], "state": j["status"], "finished_at": j["finished_at"],
+                "scan_id": j["scan_id"], "error": j["error"], "card": j["target"] in card_ips}
+        if j["scan_id"]:
+            s = insights.annotate(scanner.get_scan(j["scan_id"]))
+            h = (s or {}).get("hosts", [None])[0] if s and s.get("hosts") else None
+            if h:
+                item.update(name=h.get("hostname"), mac=h.get("mac"), device=h["device"],
+                            open=[p["port"] for p in h["ports"] if p["state"] == "open"],
+                            flags=[{"label": f["label"], "level": f["level"]} for f in h["flags"]],
+                            os=h.get("os_name"))
+            else:
+                item["no_response"] = True
+        done.append(item)
+    return {"active": active, "done": done}
+
+
+@app.route("/api/deep-tray")
+def api_deep_tray():
+    return jsonify(_deep_tray(set(request.args.get("cards", "").split(","))))
 
 
 @app.route("/scan/now", methods=["POST"])

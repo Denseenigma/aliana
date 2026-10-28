@@ -1477,6 +1477,18 @@ def get_queue(recent=25):
             "max_queued": MAX_QUEUED}
 
 
+def recent_host_jobs(hours=3, limit=6):
+    """Per-device (Deep) scan jobs that finished recently, newest first --
+    for the dashboard's "Deep scan results" tray."""
+    since = (datetime.datetime.now() - datetime.timedelta(hours=hours)).isoformat()
+    conn = _db()
+    rows = [dict(r) for r in conn.execute(
+        "SELECT * FROM jobs WHERE kind = 'host' AND status IN ('done', 'failed', 'stopped') "
+        "AND finished_at >= ? ORDER BY finished_at DESC, id DESC LIMIT ?", (since, limit))]
+    conn.close()
+    return rows
+
+
 def queue_summary():
     """Small summary for status displays."""
     conn = _db()
