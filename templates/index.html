@@ -565,7 +565,7 @@
     <form action="{{ url_for('set_profile') }}" method="post" title="{{ profiles[status.profile].description }}">
       <select name="profile" onchange="this.form.submit()" class="profile-{{ status.profile }}"
               {{ 'disabled' if status.running else '' }}>
-        {% for key, p in profiles.items() %}
+        {% for key, p in network_profiles.items() %}
         <option value="{{ key }}" {{ 'selected' if key == status.profile else '' }}>Profile: {{ p.label }}</option>
         {% endfor %}
       </select>

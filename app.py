@@ -85,6 +85,7 @@ def _dashboard(scan_id):
         flash_error=request.args.get("err"),
         excluded={h["ip"]: scanner.is_excluded(h["ip"]) for h in (scan or {}).get("hosts", [])},
         profiles=scanner.PROFILES,
+        network_profiles={k: scanner.PROFILES[k] for k in scanner.NETWORK_PROFILES},
         intervals=[(sec, _interval_label(sec)) for sec in scanner.INTERVAL_CHOICES],
         own_ips={i["ipv4"].split("/")[0] for i in interfaces if i["ipv4"]},
     )
@@ -107,7 +108,7 @@ def scan_now():
 @app.route("/profile/set", methods=["POST"])
 def set_profile():
     name = request.form.get("profile")
-    if name in scanner.PROFILES and not scanner.get_status()["running"]:
+    if name in scanner.NETWORK_PROFILES and not scanner.get_status()["running"]:
         scanner.set_profile(name)
     return redirect(url_for("index"))
 
@@ -198,8 +199,8 @@ def _kiosk_state():
         "nmap_version": _get_nmap_version(),
         "profile": status["profile"],
         "profile_label": scanner.PROFILES[status["profile"]]["label"],
-        "profiles": [{"key": k, "label": p["label"], "short": p["short"]}
-                     for k, p in scanner.PROFILES.items()],
+        "profiles": [{"key": k, "label": scanner.PROFILES[k]["label"], "short": scanner.PROFILES[k]["short"]}
+                     for k in scanner.NETWORK_PROFILES],
         "error": status["last_error"],
         "interface": current,
         "interface_ip": iface_ip,
@@ -233,7 +234,7 @@ def api_scan():
         if g and g["level"] == "confirm" and not confirm:
             extra["needs_confirm"] = g      # Pi screen shows a confirm panel
         else:
-            if profile in scanner.PROFILES:
+            if profile in scanner.NETWORK_PROFILES:
                 scanner.set_profile(profile)
             job, err = scanner.enqueue("subnet", source="manual", confirm_large=confirm)
             if err:
@@ -557,7 +558,8 @@ def api_exclusion_add():
 @app.route("/queue")
 def queue_page():
     status = scanner.get_status()
-    return render_template("queue.html", status=status, profiles=scanner.PROFILES)
+    return render_template("queue.html", status=status, profiles=scanner.PROFILES,
+                           network_profiles={k: scanner.PROFILES[k] for k in scanner.NETWORK_PROFILES})
 
 
 @app.route("/api/queue")
@@ -623,7 +625,7 @@ def api_queue_clear():
 def api_profile_next():
     """Cycles the scan profile (kiosk button). Ignored while scanning."""
     if not scanner.get_status()["running"]:
-        names = list(scanner.PROFILES)
+        names = list(scanner.NETWORK_PROFILES)
         current = scanner.get_profile()
         scanner.set_profile(names[(names.index(current) + 1) % len(names)])
     return jsonify(_kiosk_state())

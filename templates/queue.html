@@ -278,7 +278,7 @@
       </div>
       <div class="add" style="margin-top:10px">
         <select id="add-profile">
-          {% for key, p in profiles.items() %}
+          {% for key, p in network_profiles.items() %}
           <option value="{{ key }}" {{ 'selected' if key == status.profile else '' }}>Network &middot; {{ p.label }}</option>
           {% endfor %}
         </select>

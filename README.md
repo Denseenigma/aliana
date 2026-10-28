@@ -304,15 +304,17 @@ on the browser dashboard at `/`.
 
 ## Scan profiles
 
-Pick a profile on the dashboard (dropdown) or the onboard screen (the
-profile button cycles Discovery -> Standard -> Deep). Locked while a scan
-is running. Each scan records which profile it used.
+Network scans use **Discovery** or **Standard** -- pick one on the dashboard
+(dropdown), the Queue page, or the Pi screen's scan picker. **Deep** is
+per-device only: the **Deep scan** button on a host card (or "Deep scan
+host" on the Queue page) runs it against that one address. Network-wide
+Deep scans aren't offered -- too much traffic for a whole subnet.
 
 | Profile | nmap options | Impact |
 |---|---|---|
 | Discovery | `-sn -T3` | Host sweep only (ARP/ping, MAC vendor, hostname). No port scan. |
-| Standard (default) | `-sV --version-light -T3 --top-ports 100 --max-rate 300 --host-timeout 5m` | Light, rate-capped. Fine for most office networks. |
-| Deep | `-sV -T3 --top-ports 1000 --max-rate 300 --host-timeout 15m` | Much more probing. Run deliberately; avoid on fragile/OT networks. |
+| Standard (default) | `-T3 --top-ports 100 --max-rate 300 --host-timeout 5m`, then `-sV --version-light` on open ports | Light, rate-capped. Fine for most office networks. |
+| Deep (one device only) | `-T3 --top-ports 1000 --max-rate 300 --host-timeout 15m -O --osscan-limit`, then full `-sV` | Top 1000 ports, full service probing, OS guess. Host card button only. |
 
 Profiles are defined in `PROFILES` at the top of `scanner.py`.
 

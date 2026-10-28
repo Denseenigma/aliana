@@ -66,9 +66,9 @@ PROFILES = {
     },
     "deep": {
         "label": "Deep",
-        "description": "Top 1000 TCP ports with full version detection and OS "
-                       "fingerprinting. Much more traffic and probing -- run "
-                       "deliberately, not on fragile/OT networks.",
+        "description": "One device at a time (the Deep scan button on a host card): "
+                       "top 1000 TCP ports, full version detection and OS "
+                       "fingerprinting. Not offered for whole-network scans.",
         "short": "Top 1000 ports, full probing + OS guess",
         "args": ["-T3", "--top-ports", "1000", "--max-rate", "300", "--host-timeout", "15m"],
         "version_args": [],
@@ -449,14 +449,19 @@ def _set_setting(key, value):
     conn.close()
 
 
+# Profiles that can scan a whole network. Deep is too heavy for that: it's
+# only run against one device at a time (the Deep scan button on host cards).
+NETWORK_PROFILES = ("discovery", "standard")
+
+
 def get_profile():
     name = _get_setting("profile", DEFAULT_PROFILE)
-    return name if name in PROFILES else DEFAULT_PROFILE
+    return name if name in NETWORK_PROFILES else DEFAULT_PROFILE
 
 
 def set_profile(name):
-    if name not in PROFILES:
-        raise ValueError(f"Unknown scan profile: {name}")
+    if name not in NETWORK_PROFILES:
+        raise ValueError(f"Not a network scan profile: {name}")
     _set_setting("profile", name)
 
 
@@ -1374,8 +1379,11 @@ def enqueue(kind, target=None, profile=None, source="manual", confirm_large=Fals
             return None, (f"{target} is on the exclusion list" +
                           (f" ({ex['note']})" if ex["note"] else "") + " -- remove it in Settings to scan it.")
     else:
+        if profile == "deep":
+            return None, ("Deep scans run on one device at a time -- use the Deep scan button "
+                          "on that device's card.")
         iface = get_current_interface()
-        profile = profile if profile in PROFILES else get_profile()
+        profile = profile if profile in NETWORK_PROFILES else get_profile()
         # Fix the subnet now, so the size check applies to what will run
         target = get_local_subnet(iface)
         if not target:
