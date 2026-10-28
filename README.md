@@ -132,6 +132,30 @@ every scan; changes save immediately:
   open but never get service-identification probes (default `9999`;
   `ALIANA_NO_PROBE_PORTS` sets the default for a fresh install).
 
+## Device identification
+
+After each scan (stage 3, "Identifying devices") Aliana works out what every
+device is and what it's called (`identify.py`), using light, read-only
+lookups that LAN devices answer all the time:
+
+| Method | What it gives |
+|---|---|
+| MAC vendor database (`data/oui.tsv.gz`, current IEEE registry, offline) | Manufacturer -- far newer than nmap's built-in list |
+| Private-MAC check | Flags randomized "private Wi-Fi" addresses (phones, tablets, laptops) |
+| NetBIOS (UDP 137) | Windows / Samba computer name and workgroup/domain |
+| mDNS / Bonjour (UDP 5353, unicast) | `name.local`, advertised services (`_ipp`, `_airplay`, `_googlecast`, `_hap`...), friendly names, model strings |
+| SSDP / UPnP (UDP 1900) | Friendly name, manufacturer, model, device type (TVs, routers, speakers) |
+| Reverse DNS against the gateway / LAN DNS | Names your router or DNS server knows (public resolvers are skipped) |
+| Web title / server / certificate | Only on web ports already found open; never-probe ports and excluded hosts skipped |
+
+The classifier (`insights.classify_host`) weighs every clue -- advertised
+services, names, page titles, port signatures, vendor, OS guess, private
+MAC -- and shows a type badge (faded when confidence is low), the model when
+known, and the evidence on hover and on each device's page. Turn the network
+lookups off in Settings > Device identification; the vendor database is
+always used. Refresh the vendor database from Settings (needs internet on
+the Pi) or with `python3 tools/build_oui.py`.
+
 ## Devices & long-term history
 
 Aliana keeps a **living history** of each network, with devices identified

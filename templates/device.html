@@ -18,6 +18,16 @@
   .hexb.t-apple { background: var(--purple); }
   .hexb.t-linux { background: var(--silver); }
   .hexb.t-unknown { background: var(--border); color: var(--text); }
+  .hexb.t-mobile, .hexb.t-media { background: var(--cyan); }
+  .hexb.t-server, .hexb.t-power { background: var(--red); }
+  .ev-list { margin: 0; padding: 0; list-style: none; }
+  .ev-list li { padding: 3px 0; font-size: 0.85rem; display: flex; gap: 8px; }
+  .ev-list li b { font-weight: inherit; min-width: 38px; text-align: center; font-size: 0.66rem; letter-spacing: 0.08em;
+                  background: var(--border); color: var(--text); padding: 2px 4px 1px; align-self: flex-start; }
+  .ev-list li.win b { background: var(--accent); color: #000; }
+  .idgrid { display: grid; grid-template-columns: 110px 1fr; gap: 5px 12px; font-size: 0.85rem; margin-top: 10px; }
+  .idgrid .k { color: var(--muted); font-size: 0.7rem; letter-spacing: 0.12em; text-transform: uppercase; padding-top: 2px; }
+  .idgrid .v { color: var(--text); word-break: break-word; }
   .who .name { font-family: var(--title); font-size: 2.2rem; line-height: 1; color: var(--accent); }
   .who .mac { font-family: var(--mono); color: var(--text); letter-spacing: 0; }
   .who .sub { color: var(--muted); font-size: 0.85rem; letter-spacing: 0.05em; margin-top: 4px; }
@@ -85,7 +95,8 @@
       <span class="state {{ 'on' if d.present else 'off' }}">{{ 'Online' if d.present else 'Not seen lately' }}</span>
     </div>
     <dl>
-      <dt>Type</dt><dd>{{ d.device.label }} <span class="muted2">({{ d.device.why }})</span></dd>
+      <dt>Type</dt><dd>{{ d.device.label }} <span class="muted2">&middot; {{ d.device.confidence }} confidence</span></dd>
+      {% if d.device.model %}<dt>Model</dt><dd>{{ d.device.model }}</dd>{% endif %}
       <dt>Last IP</dt><dd class="mono">{{ d.ip }}</dd>
       {% if d.ips | length > 1 %}<dt>IPs seen</dt><dd class="mono">{{ d.ips | join(', ') }}</dd>{% endif %}
       {% if d.hostnames %}<dt>Names seen</dt><dd>{{ d.hostnames | join(', ') }}</dd>{% endif %}
@@ -111,6 +122,22 @@
       </dd>
       {% endif %}
     </dl>
+    {% set idn = d.ident or {} %}
+    <div class="panel-head" style="margin-top:18px"><h2>Identification</h2></div>
+    {% if d.device.evidence %}
+    <ul class="ev-list">
+      {% for e in d.device.evidence %}<li class="{{ 'win' if loop.first else '' }}"><b>{{ e.score }}</b><span>{{ e.why }} <span class="muted2">&rarr; {{ e.type }}</span></span></li>{% endfor %}
+    </ul>
+    {% else %}<p class="muted2">No clues yet &mdash; run a scan with identification on (Settings).</p>{% endif %}
+    <div class="idgrid">
+      {% if idn.netbios %}<span class="k">NetBIOS</span><span class="v">{{ idn.netbios.name }}{% if idn.netbios.group %} &middot; {{ idn.netbios.group }}{% endif %}{% if idn.netbios.server %} &middot; file sharing{% endif %}</span>{% endif %}
+      {% if idn.mdns %}<span class="k">mDNS</span><span class="v">{{ idn.mdns.name or '' }}{% if idn.mdns.instances %} &middot; “{{ idn.mdns.instances | join('”, “') }}”{% endif %}{% if idn.mdns.services %}<br><span class="muted2">{{ idn.mdns.services | join(' ') }}</span>{% endif %}{% if idn.mdns.txt %}<br><span class="muted2">{% for k, v in idn.mdns.txt.items() %}{{ k }}={{ v }} {% endfor %}</span>{% endif %}</span>{% endif %}
+      {% if idn.upnp %}<span class="k">UPnP</span><span class="v">{{ [idn.upnp.name, idn.upnp.manufacturer, idn.upnp.model, idn.upnp.model_number] | select | join(' · ') }}{% if idn.upnp.device_type %}<br><span class="muted2">{{ idn.upnp.device_type }}</span>{% endif %}{% if idn.upnp.server %}<br><span class="muted2">{{ idn.upnp.server }}</span>{% endif %}</span>{% endif %}
+      {% if idn.names and idn.names.dns %}<span class="k">DNS</span><span class="v">{{ idn.names.dns }}</span>{% endif %}
+      {% for p, h in (idn.http or {}).items() %}<span class="k">Web :{{ p }}</span><span class="v">{{ [h.title, h.server, h.realm and ('realm ' ~ h.realm), h.cert_cn and ('cert ' ~ h.cert_cn), h.cert_org] | select | join(' · ') }}</span>{% endfor %}
+      {% if idn.private_mac %}<span class="k">MAC</span><span class="v">Private / randomized &mdash; the device hides its real MAC (common on phones, tablets and laptops). It's usually stable per Wi-Fi network, so history still works.</span>{% endif %}
+      {% if idn.vendor_db %}<span class="k">Maker</span><span class="v">{{ idn.vendor_db }} <span class="muted2">(IEEE registry)</span></span>{% endif %}
+    </div>
   </section>
 
   <section class="panel">

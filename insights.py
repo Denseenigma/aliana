@@ -12,106 +12,351 @@ import sqlite3
 import scanner
 
 # ---------------------------------------------------------------- device types
+#
+# classify_host() weighs every clue we have -- advertised services (mDNS /
+# UPnP), names (NetBIOS, mDNS, DNS, UPnP), web page titles and certificates,
+# open-port signatures, the MAC vendor, nmap's OS guess, a private MAC -- and
+# picks the strongest. Each clue has a score; specific evidence ("advertises
+# _ipp", "UPnP MediaRenderer", "page title HP LaserJet") beats a vendor guess.
+
+import re as _re
+
+import identify as _identify
 
 # key -> (short code shown in the hex badge, label)
 TYPES = {
     "access":  ("ACC", "Access control"),
     "camera":  ("CAM", "Camera / video"),
-    "printer": ("PRN", "Printer"),
+    "printer": ("PRN", "Printer / scanner"),
     "phone":   ("TEL", "IP phone / voice"),
     "network": ("NET", "Network equipment"),
-    "nas":     ("NAS", "Storage"),
+    "nas":     ("NAS", "Storage (NAS)"),
+    "server":  ("SRV", "Server / management"),
+    "power":   ("PWR", "UPS / power"),
     "windows": ("WIN", "Windows computer"),
-    "apple":   ("MAC", "Apple device"),
+    "pc":      ("PC",  "Computer"),
+    "apple":   ("MAC", "Apple computer"),
     "linux":   ("LNX", "Linux / Unix host"),
     "pi":      ("RPI", "Raspberry Pi"),
-    "iot":     ("IOT", "Smart / IoT device"),
+    "mobile":  ("MOB", "Phone / tablet"),
+    "media":   ("TV",  "TV / media / speaker"),
+    "iot":     ("IOT", "Smart home / IoT"),
     "vm":      ("VM",  "Virtual machine"),
     "unknown": ("?",   "Unknown device"),
 }
 
-# Vendor name fragments (from the MAC address) -> type. First match wins.
+# MAC vendor fragments -> (type, score). Ambiguous makers get low scores so
+# any real evidence wins.
 _VENDORS = [
-    ("access", ["paxton", "hid global", "lenel", "honeywell security", "genetec", "axis access",
-                "salto", "brivo", "gallagher", "avigilon alta", "openpath"]),
-    ("camera", ["hikvision", "dahua", "axis communications", "hanwha", "vivotek", "uniview",
-                "mobotix", "avigilon", "reolink", "amcrest", "bosch security"]),
-    ("network", ["cisco", "ubiquiti", "aruba", "juniper", "netgear", "mikrotik", "fortinet",
-                 "palo alto", "meraki", "ruckus", "extreme networks", "zyxel", "d-link", "tp-link",
-                 "sonicwall", "watchguard", "hewlett packard enterprise", "routerboard", "edgecore", "allied telesis"]),
-    ("printer", ["hewlett packard", "hp inc", "brother", "canon", "epson", "lexmark", "xerox",
-                 "ricoh", "kyocera", "konica", "sharp", "zebra", "oki data"]),
-    ("phone", ["polycom", "yealink", "avaya", "grandstream", "snom", "mitel", "poly ", "plantronics",
-               "fanvil", "obihai"]),
-    ("nas", ["synology", "qnap", "western digital", "buffalo", "asustor", "drobo"]),
-    ("pi", ["raspberry"]),
-    ("apple", ["apple"]),
-    ("iot", ["espressif", "tuya", "shenzhen", "sonos", "amazon technologies", "google", "nest",
-             "philips lighting", "signify", "roku", "lifx", "ecobee", "wiz", "belkin"]),
-    ("vm", ["vmware", "xensource", "parallels", "qemu", "virtualbox"]),
-    ("windows", ["dell", "lenovo", "intel corporate", "microsoft", "asustek", "gigabyte",
-                 "micro-star", "hon hai", "liteon", "azurewave", "intel"]),
+    ("access", 70, ["paxton", "hid global", "lenel", "honeywell security", "genetec", "salto", "brivo",
+                    "gallagher", "openpath", "verkada", "kisi", "assa abloy", "allegion", "s2 security"]),
+    ("camera", 70, ["hikvision", "dahua", "axis communications", "hanwha", "vivotek", "uniview", "mobotix",
+                    "avigilon", "reolink", "amcrest", "bosch security", "arlo", "wyze", "lorex", "swann"]),
+    ("network", 65, ["cisco", "ubiquiti", "aruba", "juniper", "netgear", "mikrotik", "routerboard", "fortinet",
+                     "palo alto", "meraki", "ruckus", "extreme networks", "zyxel", "d-link", "tp-link",
+                     "sonicwall", "watchguard", "hewlett packard enterprise", "edgecore", "allied telesis",
+                     "arista", "cambium", "eero", "linksys", "arris", "commscope", "sagemcom", "technicolor",
+                     "calix", "adtran", "plume design", "draytek", "peplink", "cradlepoint", "sophos",
+                     "barracuda", "space exploration", "huawei technologies", "h3c", "ruijie", "tenda",
+                     "mercusys", "teltonika"]),
+    ("printer", 55, ["hp inc", "hewlett packard", "brother", "canon", "seiko epson", "epson", "lexmark",
+                     "xerox", "ricoh", "kyocera", "konica", "sharp corporation", "zebra", "oki electric",
+                     "oki data", "fuji xerox", "fujifilm business"]),
+    ("phone", 70, ["polycom", "yealink", "avaya", "grandstream", "snom", "mitel", "poly ", "plantronics",
+                   "fanvil", "obihai", "htek", "algo communication", "cyberdata"]),
+    ("nas", 70, ["synology", "qnap", "western digital", "buffalo", "asustor", "drobo", "terramaster",
+                 "netapp", "infortrend"]),
+    ("power", 75, ["american power conversion", "schneider electric", "eaton", "cyberpower", "tripp lite",
+                   "vertiv", "liebert", "raritan", "server technology"]),
+    ("server", 60, ["super micro", "supermicro", "inspur", "quanta"]),
+    ("pi", 80, ["raspberry"]),
+    ("iot", 65, ["espressif", "tuya", "sonoff", "itead", "shelly", "allterco", "lutron", "control4", "wirepath",
+                 "crestron", "savant", "remote technologies", "nest labs", "ecobee", "rachio", "chamberlain",
+                 "august home", "yale", "kwikset", "schlage", "eufy", "anker", "govee", "meross", "belkin",
+                 "wemo", "philips lighting", "signify", "lifx", "wiz", "roborock", "ecovacs", "irobot",
+                 "select comfort", "sleep number", "idevices", "simplisafe", "ring llc", "ring inc", "abode",
+                 "ezviz", "xiaomi communications", "aqara", "lumi united", "silicon labs", "nordic semi",
+                 "texas instruments", "particle industries", "hunter douglas", "somfy", "rheem", "carrier",
+                 "trane", "honeywell home", "resideo", "emerson", "midea", "whirlpool", "ge appliances",
+                 "haier", "miele", "bosch home", "sense labs", "rainbird", "orbit irrigation"]),
+    ("media", 55, ["roku", "sonos", "bose", "sound united", "denon", "yamaha", "onkyo", "pioneer", "vizio",
+                   "tcl", "hisense", "nvidia", "sling media", "tivo", "dish", "directv", "harman",
+                   "bang & olufsen", "universal electronics", "logitech"]),
+    ("mobile", 55, ["oneplus", "motorola mobility", "oppo", "vivo mobile", "realme", "hmd global", "fairphone",
+                    "zte", "huawei device", "honor device", "xiaomi"]),
+    ("vm", 75, ["vmware", "xensource", "parallels", "qemu", "virtualbox"]),
+    ("apple", 45, ["apple"]),
+    ("pc", 40, ["dell", "lenovo", "intel corporate", "intel", "asustek", "gigabyte", "micro-star",
+                "hon hai", "liteon", "lite-on", "azurewave", "realtek", "framework computer", "acer",
+                "microsoft corporation", "giga-byte", "elitegroup", "foxconn", "rivet networks", "killer"]),
+    ("media", 35, ["samsung", "lg electronics", "sony", "panasonic", "sharp", "philips", "amazon technologies",
+                   "google"]),
 ]
 
-# Hostname fragments -> type
-_HOSTNAMES = [
-    ("printer", ["printer", "prn", "mfp", "laserjet", "officejet", "copier"]),
-    ("camera", ["cam", "nvr", "dvr", "ipcam"]),
-    ("phone", ["phone", "sip", "voip"]),
-    ("network", ["switch", "sw-", "router", "rtr", "fw-", "firewall", "ap-", "gateway", "gw-"]),
-    ("nas", ["nas", "diskstation", "storage"]),
-    ("windows", ["desktop-", "laptop-", "win-", "pc-"]),
-    ("apple", ["macbook", "imac", "iphone", "ipad"]),
-    ("pi", ["raspberrypi", "pi-"]),
+# Advertised mDNS services -> (type, score, what it means)
+_MDNS = [
+    (("_ipp.", "_ipps.", "_printer.", "_pdl-datastream.", "_fax-ipp.", "_scanner.", "_uscan.", "_uscans."),
+     "printer", 95, "advertises printing/scanning"),
+    (("_googlecast.",), "media", 92, "Google Cast / Chromecast"),
+    (("_amzn-wplay.", "_amzn-alexa."), "media", 90, "Amazon Fire TV / Echo"),
+    (("_androidtvremote", "_androidtvremote2."), "media", 90, "Android TV"),
+    (("_sonos.", "_spotify-connect.", "_raop."), "media", 85, "audio streaming receiver"),
+    (("_roku", "_dial."), "media", 80, "TV streaming (DIAL)"),
+    (("_hap.", "_homekit.", "_matter.", "_matterc.", "_hue.", "_meshcop.", "_esphomelib.", "_shelly.",
+      "_home-assistant.", "_hubitat.", "_lutron.", "_ecobee", "_nanoleafapi.", "_wled."),
+     "iot", 92, "smart-home protocol (HomeKit / Matter / hub)"),
+    (("_companion-link.", "_apple-mobdev2.", "_rdlink.", "_apple-pairable."), "apple", 70, "Apple device services"),
+    (("_adisk.", "_afpovertcp.", "_timemachine"), "nas", 60, "network backup / file sharing"),
+    (("_smb.",), "pc", 45, "file sharing"),
+    (("_workstation.", "_ssh.", "_sftp-ssh."), "linux", 55, "Linux workstation services"),
+    (("_nvstream.",), "pc", 60, "game streaming PC"),
+    (("_axis-video.",), "camera", 95, "Axis video"),
+    (("_rtsp.",), "camera", 70, "video stream"),
 ]
+
+# UPnP deviceType fragments -> (type, score)
+_UPNP = [
+    ("internetgatewaydevice", "network", 92), ("wandevice", "network", 85), ("wlanaccesspoint", "network", 90),
+    ("mediarenderer", "media", 85), ("printer", "printer", 92), ("scanner", "printer", 85),
+    ("digitalsecuritycamera", "camera", 92), ("zoneplayer", "media", 92), ("dial", "media", 80),
+    ("mediaserver", "media", 55), ("basic", None, 0),
+]
+
+# Keywords in web page titles / server headers / auth realms / certificates
+_WEB = [
+    ("printer", 88, r"laserjet|officejet|deskjet|pagewide|designjet|hp embedded web server|ews\b|brother|epson|"
+                    r"canon|kyocera|ricoh|xerox|lexmark|konica|bizhub|sharp mx|zebra|printer|web image monitor|"
+                    r"\bcups\b|imagerunner|workcentre|versalink|altalink|ecosys|taskalfa"),
+    ("access", 92, r"paxton|net2|lenel|onguard|genetec|brivo|s2 netbox|verkada|access control"),
+    ("camera", 88, r"hikvision|dahua|ip camera|network camera|\bnvr\b|\bdvr\b|axis|amcrest|reolink|vivotek|"
+                   r"hanwha|wisenet|uniview|blue iris|milestone|unifi protect|webcam"),
+    ("phone", 88, r"polycom|yealink|grandstream|cisco ip phone|avaya|snom|mitel|fanvil|3cx|poly "),
+    ("nas", 88, r"synology|diskstation|qnap|truenas|freenas|unraid|readynas|my cloud|terramaster|asustor"),
+    ("power", 90, r"\bapc\b|network management card|ups network|eaton|cyberpower|tripp ?lite|vertiv|liebert|"
+                  r"\bpdu\b|powerchute"),
+    ("server", 88, r"idrac|integrated lights-out|\bilo\b|ipmi|supermicro|xclarity|\bcimc\b|vmware esxi|"
+                   r"vcenter|proxmox|hyper-v|ovirt|nutanix"),
+    ("network", 85, r"unifi|ubiquiti|edgeos|edgerouter|mikrotik|routeros|pfsense|opnsense|fortigate|fortinet|"
+                    r"sonicwall|meraki|cisco|aruba|netgear|tp-link|tplink|\bdeco\b|omada|asus ?wrt|asus router|"
+                    r"linksys|draytek|zyxel|watchguard|juniper|openwrt|luci|dd-wrt|ruckus|eero|firewalla|"
+                    r"velop|orbi|airos|switch|router|access point|gateway"),
+    ("iot", 85, r"home assistant|hubitat|smartthings|philips hue|shelly|tasmota|esphome|wled|nest|ecobee|"
+                r"control4|crestron|savant|lutron|rachio|myq|rti |sense monitor|octoprint"),
+    ("media", 80, r"plex|jellyfin|emby|kodi|roku|sonos|bose|denon|heos|yamaha|onkyo|smart ?tv|webos|vizio|"
+                  r"bravia|chromecast|apple tv"),
+    ("linux", 55, r"pi-hole|ubuntu|debian|cockpit|webmin|raspberry|nextcloud|portainer|grafana"),
+]
+_WEB = [(t, sc, _re.compile(rx, _re.I)) for t, sc, rx in _WEB]
+
+# Names (any source) -> type
+_NAMES = [
+    ("mobile", 75, r"iphone|ipad|ipod|galaxy|pixel|android|oneplus|redmi|moto[ -]?[gex]|\bsm-[a-z]\d|watch"),
+    ("apple", 75, r"macbook|imac|mac-?mini|mac-?pro|mac-?studio|\bmbp\b"),
+    ("windows", 70, r"^desktop-|^laptop-|^win-|^pc-|-pc$|^ws-|^wks|^lt-|^dt-|^nb-"),
+    ("printer", 75, r"printer|^prn|mfp|laserjet|officejet|epson|brother|canon|kyocera|ricoh|xerox"),
+    ("media", 72, r"\btv\b|-tv|roku|chromecast|fire-?tv|apple-?tv|appletv|sonos|homepod|shield|soundbar|"
+                  r"speaker|living-?room|bedroom"),
+    ("iot", 70, r"echo|alexa|\bnest\b|ecobee|thermostat|\bplug\b|bulb|light|switch-|esp[-_]?[0-9a-f]{4}|"
+                r"tasmota|shelly|hue|doorbell|vacuum|roborock|robot|sleep ?number|simplisafe|garage"),
+    ("camera", 72, r"\bcam\b|camera|-cam|cam-|nvr|dvr|doorbell"),
+    ("network", 70, r"switch|router|gateway|firewall|^ap-|-ap$|unifi|\bdeco\b|^sw-|^rtr|^fw-"),
+    ("nas", 72, r"\bnas\b|diskstation|synology|qnap"),
+    ("pi", 75, r"raspberrypi|^pi-|-pi$"),
+    ("server", 65, r"^srv|server|-dc\d*$|^dc\d|esxi|proxmox|hyperv|idrac|ilo"),
+]
+_NAMES = [(t, sc, _re.compile(rx, _re.I)) for t, sc, rx in _NAMES]
+
+# Port signatures -> (type, score, why)
+def _port_clues(ports):
+    c = []
+    if ports & {9100, 515, 631}:
+        c.append(("printer", 90, "printing ports open"))
+    if 554 in ports:
+        c.append(("camera", 78, "video streaming (RTSP) port"))
+    if ports & {5060, 5061}:
+        c.append(("phone", 80, "SIP voice port"))
+    if 62078 in ports:
+        c.append(("mobile", 88, "iPhone/iPad sync port"))
+    if ports & {8008, 8009} and 8443 in ports or {8008, 8009} <= ports:
+        c.append(("media", 78, "Google Cast ports"))
+    if 1400 in ports:
+        c.append(("media", 80, "Sonos port"))
+    if 8060 in ports:
+        c.append(("media", 80, "Roku control port"))
+    if 32400 in ports:
+        c.append(("media", 65, "Plex media server"))
+    if 8123 in ports:
+        c.append(("iot", 80, "Home Assistant"))
+    if ports & {1883, 8883}:
+        c.append(("iot", 55, "MQTT broker/client"))
+    if ports & {135, 3389, 5985, 5986} or {139, 445} <= ports:
+        c.append(("windows", 76, "Windows services"))
+    if 548 in ports:
+        c.append(("apple", 60, "Apple file sharing"))
+    if ports & {623, 664}:
+        c.append(("server", 75, "server management (IPMI)"))
+    if ports & {902, 9443} and 443 in ports and 902 in ports:
+        c.append(("server", 75, "VMware ESXi"))
+    if ports & {111, 2049}:
+        c.append(("linux", 50, "NFS / RPC"))
+    if ports == {22}:
+        c.append(("linux", 45, "SSH only"))
+    if ports & {161, 162} and len(ports) <= 3:
+        c.append(("network", 40, "SNMP managed device"))
+    return c
+
+
+def _model_from(ident, host):
+    """Best product / model string we have."""
+    up = ident.get("upnp") or {}
+    txt = (ident.get("mdns") or {}).get("txt") or {}
+    for v in (" ".join(x for x in (up.get("manufacturer"), up.get("model")) if x) if up.get("model") else None,
+              txt.get("md"), txt.get("usb_MDL") and " ".join(x for x in (txt.get("usb_MFG"), txt.get("usb_MDL")) if x),
+              txt.get("ty"), txt.get("product"), txt.get("model"), txt.get("am")):
+        if v:
+            return v.strip("() ")[:80]
+    prod = [p.get("product") for p in host.get("ports", []) if p.get("state") == "open" and p.get("product")]
+    for t in (h.get("title") for h in (ident.get("http") or {}).values()):
+        if t and len(t) > 3 and not _re.search(r"^(index|home|login|log in|welcome|redirect|loading|404|403)", t, _re.I):
+            return t[:80]
+    return None
 
 
 def classify_host(host):
-    """Returns {"type", "code", "label", "why"} -- a best guess from the MAC
-    vendor, hostname, open ports and nmap's OS guess."""
-    vendor = (host.get("vendor") or "").lower()
-    hostname = (host.get("hostname") or "").lower()
+    """Returns {"type", "code", "label", "why", "model", "confidence", "evidence"}:
+    a best guess at what the device is, from every clue available."""
+    ident = host.get("ident") or {}
+    vendor = (host.get("vendor") or ident.get("vendor_db") or "").lower()
+    if not vendor and host.get("mac"):
+        vendor = (_identify.vendor_for(host["mac"]) or "").lower()
     ports = {p["port"] for p in host.get("ports", []) if p.get("state") == "open"}
-    services = " ".join((p.get("service") or "") + " " + (p.get("product") or "")
-                        for p in host.get("ports", []) if p.get("state") == "open").lower()
+    services_txt = " ".join((p.get("service") or "") + " " + (p.get("product") or "")
+                            for p in host.get("ports", []) if p.get("state") == "open").lower()
     os_name = (host.get("os_name") or "").lower()
     os_type = (host.get("os_type") or "").lower()
+    names = [n for n in [host.get("hostname")] + list((ident.get("names") or {}).values()) if n]
+    md = ident.get("mdns") or {}
+    txt = md.get("txt") or {}
+    up = ident.get("upnp") or {}
+    nb = ident.get("netbios") or {}
+    clues = []   # (score, type, why)
 
-    def result(t, why):
-        code, label = TYPES[t]
-        return {"type": t, "code": code, "label": label, "why": why}
+    def add(t, score, why):
+        clues.append((score, t, why))
 
-    # Strong signals first: services that only one kind of device runs
-    if ports & {9100, 515, 631} or "printer" in services or "ipp" in services or "jetdirect" in services:
-        return result("printer", "printing ports open")
-    if 554 in ports or "rtsp" in services:
-        return result("camera", "video streaming (RTSP) port open")
-    if 5060 in ports or 5061 in ports or "sip" in services.split():
-        return result("phone", "SIP voice port open")
-    for t, frags in _VENDORS[:6]:   # access, camera, network, printer, phone, nas
-        for f in frags:
-            if f in vendor:
-                return result(t, f"vendor {host.get('vendor')}")
+    # -- strongest: what the device says about itself
+    if ident.get("gateway"):
+        add("network", 96, "default gateway")
+    svcs = " ".join(md.get("services") or []) + " "
+    for keys, t, sc, why in _MDNS:
+        if any(k in svcs for k in keys):
+            add(t, sc, f"mDNS: {why}")
+    model_hint = " ".join(str(txt.get(k, "")) for k in ("am", "model", "md")).lower()
+    if _re.search(r"iphone|ipad|ipod|watch", model_hint):
+        add("mobile", 94, f"Apple model {txt.get('model') or txt.get('am')}")
+    elif _re.search(r"macbook|imac|macmini|macpro|mac\d|mac1|macstudio", model_hint):
+        add("apple", 94, f"Apple model {txt.get('model') or txt.get('am')}")
+    elif _re.search(r"appletv|audioaccessory|homepod", model_hint):
+        add("media", 94, "Apple TV / HomePod")
+    if txt.get("usb_MDL") or txt.get("ty"):
+        add("printer", 93, f"printer model {txt.get('usb_MDL') or txt.get('ty')}")
+    dt = (up.get("device_type") or "").lower()
+    for frag, t, sc in _UPNP:
+        if frag in dt and t:
+            add(t, sc, f"UPnP {up.get('device_type', '').split(':')[-2] if ':' in up.get('device_type', '') else dt}")
+            break
+    web_blob = " ".join(" ".join(str(v) for k, v in h.items() if k in ("title", "server", "realm", "cert_cn", "cert_org"))
+                        for h in (ident.get("http") or {}).values())
+    up_blob = " ".join(str(up.get(k, "")) for k in ("manufacturer", "model", "description", "name", "server"))
+    for t, sc, rx in _WEB:
+        m = rx.search(web_blob)
+        if m:
+            add(t, sc, f"web page: “{m.group(0)}”")
+            break
+    for t, sc, rx in _WEB:
+        m = rx.search(up_blob)
+        if m:
+            add(t, sc - 5, f"UPnP: “{m.group(0)}”")
+            break
+    if nb:
+        if ports & {22} and not ports & {135, 445, 3389} and "linux" in os_name:
+            add("linux", 70, "Samba (NetBIOS) on Linux")
+        else:
+            add("windows", 82 if not ident.get("private_mac") else 80, f"NetBIOS name {nb.get('name')}")
+    # -- ports / OS / services
+    for t, sc, why in _port_clues(ports):
+        add(t, sc, why)
+    if "printer" in services_txt or "jetdirect" in services_txt or "ipp" in services_txt.split():
+        add("printer", 85, "printing service")
+    if "rtsp" in services_txt:
+        add("camera", 70, "RTSP service")
     if "printer" in os_type:
-        return result("printer", "OS fingerprint")
-    if any(k in os_type for k in ("switch", "router", "firewall", "wap", "broadband")):
-        return result("network", "OS fingerprint")
-    if "webcam" in os_type:
-        return result("camera", "OS fingerprint")
-    for t, frags in _HOSTNAMES:
-        if any(f in hostname for f in frags):
-            return result(t, f"hostname {host.get('hostname')}")
-    if "windows" in os_name or ports & {135, 3389} or (445 in ports and 139 in ports):
-        return result("windows", "Windows services / OS fingerprint")
-    if any(k in os_name for k in ("mac os", "macos", "ios", "darwin")) or 548 in ports:
-        return result("apple", "OS fingerprint")
-    for t, frags in _VENDORS[6:]:   # pi, apple, iot, vm, windows-ish PC makers
-        for f in frags:
-            if f in vendor:
-                return result(t, f"vendor {host.get('vendor')}")
-    if "linux" in os_name or "unix" in os_name or ports == {22}:
-        return result("linux", "SSH only / OS fingerprint")
-    return result("unknown", "not enough information")
+        add("printer", 70, "OS fingerprint")
+    if any(k in os_type for k in ("switch", "router", "firewall", "wap", "broadband", "bridge")):
+        add("network", 70, "OS fingerprint")
+    if "webcam" in os_type or "camera" in os_type:
+        add("camera", 70, "OS fingerprint")
+    if "phone" in os_type and "voip" in os_type:
+        add("phone", 70, "OS fingerprint")
+    if "windows" in os_name:
+        add("windows", 72, "OS fingerprint: Windows")
+    if _re.search(r"mac os|macos|darwin", os_name):
+        add("apple", 70, "OS fingerprint: macOS")
+    if _re.search(r"\bios\b|iphone", os_name):
+        add("mobile", 70, "OS fingerprint: iOS")
+    if "android" in os_name:
+        add("mobile", 70, "OS fingerprint: Android")
+    if ("linux" in os_name or "unix" in os_name) and not clues:
+        add("linux", 50, "OS fingerprint: Linux")
+    # -- names
+    for n in names:
+        for t, sc, rx in _NAMES:
+            if rx.search(n):
+                add(t, sc, f"name “{n}”")
+                break
+    # -- vendor
+    for t, sc, frags in _VENDORS:
+        hit = next((f for f in frags if f in vendor), None)
+        if hit:
+            add(t, sc, f"maker {host.get('vendor') or ident.get('vendor_db')}")
+            break
+    mac_hex = _re.sub(r"[^0-9A-F]", "", (host.get("mac") or "").upper())
+    if mac_hex[:6] in ("00155D",):
+        add("vm", 85, "Hyper-V virtual network adapter")
+    elif mac_hex[:6] in ("000C29", "005056", "000569"):
+        add("vm", 85, "VMware virtual network adapter")
+    elif mac_hex[:6] in ("080027", "0A0027"):
+        add("vm", 85, "VirtualBox virtual network adapter")
+    elif mac_hex[:6] in ("525400",):
+        add("vm", 80, "KVM/QEMU virtual network adapter")
+    if ident.get("private_mac") or (host.get("mac") and _identify.is_private_mac(host["mac"])):
+        add("mobile", 48, "private (randomized) MAC — phones, tablets and laptops use these")
+
+    model = _model_from(ident, host)
+    if not clues:
+        code, label = TYPES["unknown"]
+        maker = host.get("vendor") or ident.get("vendor_db")
+        if maker:
+            label = f"{maker.split(',')[0].split(' Co')[0].strip()} device"
+        return {"type": "unknown", "code": code, "label": label, "why": "not enough information",
+                "model": model, "confidence": "none", "evidence": []}
+    clues.sort(key=lambda c: -c[0])
+    score, t, why = clues[0]
+    # agreeing clues raise confidence
+    agree = sum(1 for c in clues if c[1] == t)
+    conf = "high" if score >= 85 or (score >= 70 and agree >= 2) else "medium" if score >= 55 else "low"
+    code, label = TYPES[t]
+    if t == "network" and ident.get("gateway"):
+        label = "Router / gateway"
+    if t == "mobile" and clues[0][2].startswith("private"):
+        label = "Phone / tablet / laptop"
+    seen, evidence = set(), []
+    for sc, tt, w in clues:
+        if w not in seen:
+            seen.add(w)
+            evidence.append({"type": tt, "score": sc, "why": w})
+    return {"type": t, "code": code, "label": label, "why": why, "model": model, "confidence": conf,
+            "evidence": evidence[:8]}
 
 
 # ---------------------------------------------------------------- exposure flags

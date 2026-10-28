@@ -17,6 +17,7 @@ from flask import Flask, render_template, jsonify, redirect, url_for, request, R
 import scanner
 import insights
 import history
+import identify
 import rmm
 import wifi
 import qr
@@ -466,6 +467,8 @@ def _settings_state():
         "profile_label": scanner.PROFILES[scanner.get_profile()]["label"],
         "mode": scanner.scan_mode(),
         "exclusions": scanner.get_exclusions(),
+        "identify": scanner.get_identify_enabled(),
+        "vendor_db": identify.oui_info(),
         "guard": _safe_guard(),
         "interface": scanner.get_current_interface(),
         "guard_levels": {"warn": scanner.GUARD_WARN_PREFIX, "confirm": scanner.GUARD_CONFIRM_PREFIX,
@@ -517,6 +520,8 @@ def api_settings():
             if bad:
                 return jsonify({"ok": False, "error": "Not a valid port or range: " + ", ".join(bad)}), 400
             scanner.set_no_probe_ports(items)
+        if "identify" in data:
+            scanner.set_identify_enabled(bool(data["identify"]))
         if "exclusions" in data:
             try:
                 scanner.set_exclusions(data["exclusions"])
@@ -524,6 +529,16 @@ def api_settings():
                 return jsonify({"ok": False, "error": str(e)}), 400
         time.sleep(0.1)  # let the auto-scan loop publish a new countdown
     return jsonify({"ok": True, "settings": _settings_state()})
+
+
+@app.route("/api/vendor-db/update", methods=["POST"])
+def api_vendor_db_update():
+    """Refreshes the MAC vendor database from the IEEE (needs internet)."""
+    try:
+        n = identify.update_oui()
+    except Exception as e:
+        return jsonify({"ok": False, "error": f"Couldn't update the vendor database: {e}"}), 502
+    return jsonify({"ok": True, "entries": n, "vendor_db": identify.oui_info()})
 
 
 @app.route("/api/exclusions/add", methods=["POST"])

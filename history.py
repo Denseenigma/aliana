@@ -22,6 +22,7 @@ import socket
 import sqlite3
 import uuid
 
+import identify
 import scanner
 
 FORMAT = "aliana-history"
@@ -72,7 +73,8 @@ def export_bundle(scan_ids=None):
             ports = [{k: p[k] for k in ("port", "protocol", "state", "service", "product", "version", "probe")}
                      for p in c.execute("SELECT * FROM ports WHERE host_id = ? ORDER BY port", (h["id"],))]
             hosts.append({**{k: h[k] for k in ("ip", "mac", "vendor", "hostname", "status",
-                                               "os_name", "os_accuracy", "os_type")}, "ports": ports})
+                                               "os_name", "os_accuracy", "os_type")},
+                          "ident": scanner._ident(h["ident"]) or None, "ports": ports})
         scans.append({**{k: s[k] for k in ("uid", "started_at", "finished_at", "subnet", "profile", "mode",
                                           "scope", "ports_checked", "source", "node")},
                       "host_count": len(hosts), "hosts": hosts})
@@ -172,10 +174,11 @@ def import_bundle(data, max_scans=5000):
                     acc = int(h["os_accuracy"]) if h.get("os_accuracy") not in (None, "") else None
                 except (TypeError, ValueError):
                     acc = None
-                c.execute("INSERT INTO hosts (scan_id, ip, mac, vendor, hostname, status, os_name, os_accuracy, os_type) "
-                          "VALUES (?, ?, ?, ?, ?, 'up', ?, ?, ?)",
+                ident = identify.ident_json(h["ident"]) if isinstance(h.get("ident"), dict) else None
+                c.execute("INSERT INTO hosts (scan_id, ip, mac, vendor, hostname, status, os_name, os_accuracy, os_type, "
+                          "ident) VALUES (?, ?, ?, ?, ?, 'up', ?, ?, ?, ?)",
                           (scan_id, ip, mac, _s(h.get("vendor"), 128), _s(h.get("hostname"), 255),
-                           _s(h.get("os_name"), 255), acc, _s(h.get("os_type"), 64)))
+                           _s(h.get("os_name"), 255), acc, _s(h.get("os_type"), 64), ident))
                 host_id = c.lastrowid
                 n += 1
                 if mac and mac not in known_macs:
@@ -211,7 +214,7 @@ def _sightings(mac=None):
     """All host rows (optionally for one MAC) joined with their scan, oldest first."""
     conn = _db()
     sql = ("SELECT h.id AS host_id, h.ip, UPPER(h.mac) AS mac, h.vendor, h.hostname, h.os_name, h.os_accuracy, "
-           "h.os_type, s.id AS scan_id, s.finished_at, s.subnet, s.profile, s.scope, s.ports_checked, s.source, s.node "
+           "h.os_type, h.ident, s.id AS scan_id, s.finished_at, s.subnet, s.profile, s.scope, s.ports_checked, s.source, s.node "
            "FROM hosts h JOIN scans s ON s.id = h.scan_id WHERE h.mac IS NOT NULL")
     args = ()
     if mac:
@@ -229,6 +232,7 @@ def _sightings(mac=None):
                 ports.setdefault(p["host_id"], []).append(dict(p))
         for r in rows:
             r["ports"] = ports.get(r["host_id"], [])
+            r["ident"] = scanner._ident(r.get("ident"))
     conn.close()
     return rows
 
@@ -248,8 +252,11 @@ def _summarise(mac, rows, latest_times):
     # Most recent sighting that actually looked at ports
     port_rows = [r for r in rows if r["profile"] != "discovery"]
     latest_ports = port_rows[-1]["ports"] if port_rows else []
-    vendor = next((r["vendor"] for r in reversed(rows) if r["vendor"]), None)
-    hostname = next((r["hostname"] for r in reversed(rows) if r["hostname"]), None)
+    ident = next((r["ident"] for r in reversed(rows) if r.get("ident") and r["ident"].get("sources")), None) \
+        or next((r["ident"] for r in reversed(rows) if r.get("ident")), {})
+    vendor = next((r["vendor"] for r in reversed(rows) if r["vendor"]), None) or ident.get("vendor_db") \
+        or identify.vendor_for(mac)
+    hostname = next((r["hostname"] for r in reversed(rows) if r["hostname"]), None) or ident.get("name")
     os_row = next((r for r in reversed(rows) if r["os_name"]), None)
     ips, hostnames, networks = {}, {}, set()
     for r in rows:
@@ -258,7 +265,8 @@ def _summarise(mac, rows, latest_times):
             hostnames[r["hostname"]] = r["finished_at"]
         if r["scope"] != "host":
             networks.add(r["subnet"])
-    host_like = {"mac": mac, "vendor": vendor, "hostname": hostname, "ports": latest_ports,
+    host_like = {"mac": mac, "ip": last["ip"], "vendor": vendor, "hostname": hostname, "ports": latest_ports,
+                 "ident": ident,
                  "os_name": os_row["os_name"] if os_row else None,
                  "os_type": os_row["os_type"] if os_row else None}
     present = any(r["finished_at"] == latest_times.get(r["subnet"]) for r in rows if r["scope"] != "host")
@@ -276,6 +284,7 @@ def _summarise(mac, rows, latest_times):
         "present": present,
         "open_ports": sorted({(p["port"], p["protocol"]) for p in latest_ports if p["state"] == "open"}),
         "os_name": host_like["os_name"],
+        "ident": ident,
         "device": insights.classify_host(host_like),
         "flags": insights.host_flags(host_like),
         "_host": host_like,

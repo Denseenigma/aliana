@@ -19,6 +19,8 @@ import shutil
 import socket
 import json
 
+import identify
+
 DB_PATH = os.path.join(os.path.dirname(__file__), "aliana.db")
 SCAN_INTERFACE = os.environ.get("ALIANA_IFACE", "usb0")
 SCAN_INTERVAL_SECONDS = int(os.environ.get("ALIANA_SCAN_INTERVAL", "300"))  # 5 min default
@@ -197,7 +199,7 @@ def _handle_nmap_line(line):
         return
     # "Scanning N hosts" during host discovery means addresses to probe, not
     # hosts found -- only trust it once the port scan has started.
-    discovering = _progress["phase"] in ("Starting", "Discovering hosts") or _progress.get("stage") == 2
+    discovering = _progress["phase"] in ("Starting", "Discovering hosts") or _progress.get("stage") in (2, 3)
     m = _RE_SCANNING_N.search(line)
     if m:
         if not discovering:
@@ -340,6 +342,9 @@ def init_db():
     for col in ("uid", "source", "node"):
         if col not in cols:
             c.execute(f"ALTER TABLE scans ADD COLUMN {col} TEXT")
+    hcols2 = [r[1] for r in c.execute("PRAGMA table_info(hosts)")]
+    if "ident" not in hcols2:   # JSON: names / evidence from identify.py
+        c.execute("ALTER TABLE hosts ADD COLUMN ident TEXT")
     for (sid,) in c.execute("SELECT id FROM scans WHERE uid IS NULL").fetchall():
         c.execute("UPDATE scans SET uid = ?, source = COALESCE(source, 'local') WHERE id = ?",
                   (uuid.uuid4().hex, sid))
@@ -481,6 +486,45 @@ def set_auto_scan(enabled=None, interval=None):
     if enabled is not None:
         _set_setting("auto_scan", "1" if enabled else "0")
     _schedule_changed.set()
+
+
+def get_identify_enabled():
+    """Device identification (NetBIOS / mDNS / UPnP / DNS / web titles) after
+    each scan. On by default; the vendor database is always used."""
+    return _get_setting("identify", "1") == "1"
+
+
+def set_identify_enabled(on):
+    _set_setting("identify", "1" if on else "0")
+
+
+_ALWAYS_STOP = threading.Event()
+_ALWAYS_STOP.set()
+
+
+def _identify_devices(hosts, scope, interface, enabled=True):
+    if not hosts:
+        return
+    if not enabled:
+        for h in hosts:   # vendor database + private-MAC check only (no network traffic)
+            h["ident"] = identify.identify_host(h, stop=_ALWAYS_STOP)
+            if not h.get("vendor") and h["ident"].get("vendor_db"):
+                h["vendor"] = h["ident"]["vendor_db"]
+        return
+    _progress["stage"] = 3
+    _progress["phase"] = "Identifying devices"
+    _progress["percent"] = 0
+    iface = interface or get_current_interface()
+    iface_ip = next((i["ipv4"].split("/")[0] for i in list_interfaces() if i["name"] == iface and i["ipv4"]), None)
+
+    def prog(done, total):
+        _progress["percent"] = round(100.0 * done / max(1, total), 1)
+
+    try:
+        identify.identify_hosts(hosts, iface_ip=iface_ip, scope=scope, no_probe=get_no_probe_ports(),
+                                stop=_stop_requested, progress=prog)
+    except Exception:
+        traceback.print_exc()
 
 
 def get_no_probe_ports():
@@ -865,6 +909,12 @@ def run_scan(subnet=None, profile=None, scope="subnet", interface=None):
         stage2 = "ok"
         if profile != "discovery":
             stage2 = _identify_services(profile, hosts, mode == "syn", xml_path)
+
+        # Stage 3: work out what each device is and what it's called
+        # (vendor database, NetBIOS, mDNS, UPnP, router DNS, web page titles).
+        # Light, read-only lookups; skipped (bar the vendor database) when
+        # identification is switched off or the scan was stopped.
+        _identify_devices(hosts, scope, interface, enabled=get_identify_enabled() and stage2 != "stopped")
         finished = datetime.datetime.now().isoformat()
 
         scan_id = _store_results(subnet, started, finished, hosts, profile, mode, checked, scope)
@@ -1036,10 +1086,11 @@ def _store_results(subnet, started, finished, hosts, profile=None, mode=None, po
 
     for h in hosts:
         c.execute(
-            "INSERT INTO hosts (scan_id, ip, mac, vendor, hostname, status, os_name, os_accuracy, os_type) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO hosts (scan_id, ip, mac, vendor, hostname, status, os_name, os_accuracy, os_type, ident) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (scan_id, h["ip"], h["mac"], h["vendor"], h["hostname"], h["status"],
-             h.get("os_name"), h.get("os_accuracy"), h.get("os_type")),
+             h.get("os_name"), h.get("os_accuracy"), h.get("os_type"),
+             identify.ident_json(h["ident"]) if h.get("ident") else None),
         )
         host_id = c.lastrowid
         for p in h["ports"]:
@@ -1053,6 +1104,17 @@ def _store_results(subnet, started, finished, hosts, profile=None, mode=None, po
     conn.commit()
     conn.close()
     return scan_id
+
+
+def _ident(raw):
+    if not raw:
+        return {}
+    if isinstance(raw, dict):
+        return raw
+    try:
+        return json.loads(raw)
+    except ValueError:
+        return {}
 
 
 HISTORY_LOOKBACK = 50  # earlier scans consulted for "last seen" ports
@@ -1115,6 +1177,7 @@ def get_scan(scan_id=None):
             c.execute("SELECT * FROM ports WHERE host_id = ? ORDER BY port", (h["id"],))
             host = dict(h)
             host["ports"] = [dict(p) for p in c.fetchall()]
+            host["ident"] = _ident(host.get("ident"))
             out.append(host)
         return out
 
@@ -1150,7 +1213,7 @@ def get_scan(scan_id=None):
                                          "profile": hs["profile"]}
                     card["shown_scan"] = hs
                     card["ports"] = hh["ports"]
-                    for k in ("os_name", "os_accuracy", "os_type", "hostname", "vendor", "mac"):
+                    for k in ("os_name", "os_accuracy", "os_type", "hostname", "vendor", "mac", "ident"):
                         if hh.get(k):
                             card[k] = hh[k]
 

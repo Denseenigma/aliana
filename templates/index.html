@@ -229,6 +229,14 @@
   .tile .num small { font-family: var(--sans); font-size: 0.8rem; letter-spacing: 0.1em; color: var(--red); margin-left: 8px; text-transform: uppercase; }
   .exports { display: flex; gap: 4px; }
   .host .meta a.hist { color: var(--accent); }
+  .idline { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; margin: -4px 0 8px; font-size: 0.8rem; }
+  .idline .model { color: var(--text); margin-right: 4px; }
+  .idline .src { font-size: 0.62rem; letter-spacing: 0.12em; text-transform: uppercase; padding: 1px 5px 0;
+                 color: var(--cyan); box-shadow: inset 0 0 0 1px rgba(0, 229, 255, 0.45); cursor: help; }
+  .idline .src.priv { color: var(--muted); box-shadow: inset 0 0 0 1px var(--border); }
+  .hexb.c-low, .hexb.c-none { opacity: 0.6; }
+  .hexb.t-mobile, .hexb.t-media { background: var(--cyan); }
+  .hexb.t-server, .hexb.t-power { background: var(--red); }
   .rmm-line { font-size: 0.75rem; letter-spacing: 0.08em; text-transform: uppercase; margin: -4px 0 8px; }
   .rmm-line.ok, .rmm-line.ok a { color: var(--green); text-decoration: none; }
   .rmm-line.ok a:hover { text-decoration: underline; }
@@ -653,7 +661,7 @@
           {% set open_ports = host.ports | selectattr('state', 'equalto', 'open') | list %}
           <div class="host">
             <div class="host-top">
-              <span class="hexb t-{{ host.device.type }}" title="{{ host.device.label }} -- guess from {{ host.device.why }}">{{ host.device.code }}</span>
+              <span class="hexb t-{{ host.device.type }} c-{{ host.device.confidence }}" title="{{ host.device.label }} ({{ host.device.confidence }} confidence){% for e in host.device.evidence %}&#10;&middot; {{ e.why }}{% endfor %}">{{ host.device.code }}</span>
               <span class="ip">{{ host.ip }}</span>
               {% if host.is_new %}<span class="tag new" title="Not seen in the previous scan">New</span>{% endif %}
               {% if host.hostname %}<span class="name">{{ host.hostname }}</span>{% endif %}
@@ -672,9 +680,17 @@
               {% if host.ip in own_ips %}<span class="tag">THIS UNIT</span>
               {% elif host.mac %}{% if host.vendor %}{{ host.vendor }} &middot; {% endif %}<span class="mac">{{ host.mac }}</span>
               {% else %}<span class="mac">MAC &ndash;</span>{% endif %}
-              &middot; <span class="dtype">{{ host.device.label }}</span>
+              &middot; <span class="dtype" title="{% for e in host.device.evidence %}{{ e.why }}&#10;{% endfor %}">{{ host.device.label }}</span>
               {% if host.mac %}&middot; <a class="hist" href="{{ url_for('device_page', mac=host.mac) }}" title="This device's history">history</a>{% endif %}
             </div>
+            {% set idn = host.ident or {} %}
+            {% if host.device.model or idn.sources or idn.private_mac %}
+            <div class="idline">
+              {% if host.device.model %}<span class="model">{{ host.device.model }}</span>{% endif %}
+              {% for src in idn.sources or [] %}<span class="src" title="{% if src == 'netbios' %}NetBIOS name {{ idn.netbios.name }}{% if idn.netbios.group %} &middot; {{ idn.netbios.group }}{% endif %}{% elif src == 'mdns' %}mDNS {{ (idn.mdns.name or '') }} {{ (idn.mdns.services or []) | join(' ') }}{% elif src == 'upnp' %}UPnP {{ idn.upnp.name or '' }} {{ idn.upnp.manufacturer or '' }} {{ idn.upnp.model or '' }}{% elif src == 'dns' %}DNS {{ idn.names.dns }}{% elif src == 'http' %}{% for p, h in idn.http.items() %}:{{ p }} {{ h.title or h.server or h.cert_cn or '' }} {% endfor %}{% endif %}">{{ {'netbios': 'NetBIOS', 'mdns': 'mDNS', 'upnp': 'UPnP', 'dns': 'DNS', 'http': 'Web'}[src] }}</span>{% endfor %}
+              {% if idn.private_mac %}<span class="src priv" title="Locally administered (randomized) MAC address: the device hides its real MAC, so there's no maker to look up">Private MAC</span>{% endif %}
+            </div>
+            {% endif %}
             {% if host.rmm and host.rmm.status == 'managed' %}
             <div class="rmm-line ok" title="Matched by {{ host.rmm.by }}{% if host.rmm.device.os %} &middot; {{ host.rmm.device.os }}{% endif %}">
               {% if host.rmm.device.url %}<a href="{{ host.rmm.device.url }}" target="_blank" rel="noopener">{% endif %}{{ host.rmm.provider }} &#10003; {{ host.rmm.device.hostname }}{% if host.rmm.device.site %} &middot; {{ host.rmm.device.site }}{% endif %}{% if host.rmm.device.url %}</a>{% endif %}{% if host.rmm.by == 'hostname' %} <span class="muted">(by name)</span>{% endif %}

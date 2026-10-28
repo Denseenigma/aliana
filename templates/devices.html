@@ -42,6 +42,9 @@
   .hexb.t-apple { background: var(--purple); }
   .hexb.t-linux { background: var(--silver); }
   .hexb.t-unknown { background: var(--border); color: var(--text); }
+  .hexb.t-mobile, .hexb.t-media { background: var(--cyan); }
+  .hexb.t-server, .hexb.t-power { background: var(--red); }
+  .hexb.c-low, .hexb.c-none { opacity: 0.6; }
   .pres { display: inline-block; width: 8px; height: 8px; margin-right: 6px; background: var(--border); }
   .pres.on { background: var(--green); box-shadow: 0 0 5px var(--green); }
   .ports { font-family: var(--mono); font-size: 0.76rem; color: var(--muted); letter-spacing: 0; max-width: 220px; }
@@ -119,9 +122,9 @@
           data-present="{{ 1 if d.present else 0 }}" data-missing="{{ 1 if d.rmm and d.rmm.status == 'missing' else 0 }}"
           data-flagged="{{ 1 if d.flags else 0 }}"
           data-text="{{ [d.mac, d.vendor, d.hostname, d.device.label] | select | join(' ') | lower }} {{ d.ips | join(' ') }} {{ d.hostnames | join(' ') | lower }}">
-        <td><span class="hexb t-{{ d.device.type }}" title="{{ d.device.label }} -- {{ d.device.why }}">{{ d.device.code }}</span></td>
+        <td><span class="hexb t-{{ d.device.type }} c-{{ d.device.confidence }}" title="{{ d.device.label }} ({{ d.device.confidence }} confidence) -- {{ d.device.why }}">{{ d.device.code }}</span></td>
         <td><a href="{{ url_for('device_page', mac=d.mac) }}"><span class="pres {{ 'on' if d.present else '' }}" title="{{ 'In the latest scan of its network' if d.present else 'Not in the latest scan' }}"></span>{{ d.hostname or d.vendor or 'Unknown device' }}</a>
-          <span class="sm2"><span class="mac">{{ d.mac }}</span>{% if d.hostname and d.vendor %} &middot; {{ d.vendor }}{% endif %}</span></td>
+          <span class="sm2"><span class="mac">{{ d.mac }}</span>{% if d.hostname and d.vendor %} &middot; {{ d.vendor }}{% endif %}{% if d.device.model %} &middot; {{ d.device.model }}{% endif %}{% if not d.hostname and not d.vendor %} &middot; {{ d.device.label }}{% endif %}</span></td>
         <td><span class="ipc">{{ d.ip }}</span>{% if d.ips | length > 1 %}<span class="sm2">{{ d.ips | length }} IPs seen</span>{% endif %}</td>
         <td>{{ d.last_seen | when }}<span class="sm2">first {{ d.first_seen | when }} &middot; {{ d.sightings }}&times;</span></td>
         <td class="ports">{% for p, pr in d.open_ports[:8] %}{{ p }}{{ ', ' if not loop.last }}{% endfor %}{% if d.open_ports | length > 8 %} +{{ d.open_ports | length - 8 }}{% endif %}</td>

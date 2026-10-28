@@ -325,6 +325,22 @@
   </section>
 
   <section class="panel">
+    <div class="panel-head"><h2>Device identification</h2></div>
+    <p class="desc">After each scan Aliana works out <b>what each device is and what it's called</b>, using light,
+      read-only lookups that devices on a LAN answer all the time: <b>NetBIOS</b> names (Windows), <b>mDNS / Bonjour</b>
+      (Apple, Android, printers, Chromecast, smart-home), <b>UPnP</b> descriptions (TVs, routers, speakers),
+      reverse DNS against your router, and the <b>title / certificate</b> of web interfaces already found open.
+      Excluded hosts and never-probe ports are skipped. The MAC vendor database is always used.</p>
+    <div class="opts" id="id-opts">
+      <button type="button" class="opt off" data-id="0">Off</button>
+      <button type="button" class="opt" data-id="1">On</button>
+    </div>
+    <div class="readout" id="vdb-readout"></div>
+    <div class="add" style="margin-top:10px"><button type="button" class="ghost sm" id="vdb-update">Update vendor database</button>
+      <span class="hint" style="margin:0">Downloads the latest IEEE registry (needs internet on the Pi).</span></div>
+  </section>
+
+  <section class="panel">
     <div class="panel-head"><h2>Never-probe ports</h2></div>
     <p class="desc">Ports that are still <b>reported as open</b> but never get service-identification probes.
       Use this for devices that accept a connection and then go silent (e.g. door-access controllers on
@@ -448,7 +464,18 @@
       : "Now on " + esc(S.interface) + ": <b>no IPv4 address</b>";
   }
 
+  function renderIdent() {
+    document.querySelectorAll("#id-opts .opt").forEach(function (b) {
+      var on = b.getAttribute("data-id") === "1";
+      b.className = "opt" + (on ? "" : " off") + ((on === !!S.identify) ? " on" : "");
+    });
+    var v = S.vendor_db || {};
+    $("vdb-readout").innerHTML = "Vendor database <b>" + (v.entries || 0).toLocaleString() + "</b> prefixes" +
+      (v.updated ? " &middot; updated <b>" + esc(v.updated) + "</b>" : "");
+  }
+
   function render() {
+    renderIdent();
     renderSafety();
     $("prof").textContent = S.profile_label;
     var opts = [{ v: "off", label: "Off", on: !S.auto_scan }].concat(S.intervals.map(function (iv) {
@@ -485,6 +512,14 @@
       save({ no_probe_ports: S.no_probe_ports.concat(add) }).then(function (ok) { if (ok) $("port-in").value = ""; });
     } else if (b.id === "port-reset") {
       save({ no_probe_ports: S.no_probe_default });
+    } else if (b.hasAttribute("data-id")) {
+      save({ identify: b.getAttribute("data-id") === "1" });
+    } else if (b.id === "vdb-update") {
+      b.disabled = true; b.textContent = "Updating\u2026";
+      fetch("/api/vendor-db/update", { method: "POST" }).then(function (r) { return r.json(); }).then(function (d) {
+        b.disabled = false; b.textContent = "Update vendor database";
+        if (d.ok) { S.vendor_db = d.vendor_db; render(); saved(); } else flash(d.error || "Update failed.");
+      }).catch(function () { b.disabled = false; b.textContent = "Update vendor database"; flash("Update failed."); });
     } else if (b.hasAttribute("data-exrm")) {
       var rmx = b.getAttribute("data-exrm");
       save({ exclusions: S.exclusions.filter(function (e) { return e.spec !== rmx; }) });

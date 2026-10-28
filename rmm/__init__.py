@@ -25,7 +25,7 @@ PROVIDERS = {p.key: p for p in (Datto,)}
 
 # Device types that should carry an RMM agent. Anything else (printers,
 # cameras, door controllers, switches...) shows "no agent expected".
-AGENT_TYPES = {"windows", "apple", "linux", "vm"}
+AGENT_TYPES = {"windows", "pc", "apple", "linux", "vm", "server"}
 
 AUTO_SYNC_MINUTES = 30   # after a network scan, re-sync if older than this
 
