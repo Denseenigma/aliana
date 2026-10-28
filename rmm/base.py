@@ -65,26 +65,31 @@ class Provider:
         body = None
         if data is not None:
             body = data if isinstance(data, bytes) else urllib.parse.urlencode(data).encode()
-        req = urllib.request.Request(url, data=body, method=method, headers=headers or {})
+        hdrs = {"User-Agent": USER_AGENT}
+        hdrs.update(headers or {})
+        req = urllib.request.Request(url, data=body, method=method, headers=hdrs)
         try:
             with urllib.request.urlopen(req, timeout=timeout) as r:
                 return json.loads(r.read().decode("utf-8") or "null")
         except urllib.error.HTTPError as e:
-            detail = ""
-            try:
-                detail = e.read().decode("utf-8", "ignore")[:200]
-            except Exception:
-                pass
-            raise RMMError(self.http_error_message(e.code, detail))
+            detail = _error_detail(e)
+            log(f"{self.key}: {method} {_redact(url)} -> HTTP {e.code} {detail}")
+            err = RMMError(self.http_error_message(e.code, detail, url))
+            err.status, err.detail = e.code, detail
+            raise err
         except urllib.error.URLError as e:
+            log(f"{self.key}: {method} {_redact(url)} -> {e.reason}")
             raise RMMError(f"Can't reach {urllib.parse.urlparse(url).netloc}: {e.reason}. "
-                           "Check the Pi has internet access and the API URL is right.")
+                           "Check the Pi has internet access (and DNS) and the API URL is right.")
         except (TimeoutError, OSError) as e:
-            raise RMMError(f"Network error talking to the RMM: {e}")
+            log(f"{self.key}: {method} {_redact(url)} -> {e}")
+            raise RMMError(f"Network error talking to {urllib.parse.urlparse(url).netloc}: {e}")
         except ValueError:
-            raise RMMError("The RMM returned something that isn't JSON -- is the API URL right?")
+            log(f"{self.key}: {method} {_redact(url)} -> response wasn't JSON")
+            raise RMMError(f"{urllib.parse.urlparse(url).netloc} returned something that isn't JSON "
+                           "-- is the API URL right?")
 
-    def http_error_message(self, code, detail):
+    def http_error_message(self, code, detail, url=""):
         if code in (400, 401):
             return "The RMM rejected the credentials (HTTP %d). Check the API key and secret." % code
         if code == 403:
@@ -92,3 +97,33 @@ class Provider:
         if code == 429:
             return "Rate limited by the RMM (HTTP 429). Wait a minute and try again."
         return f"RMM API error (HTTP {code}). {detail}".strip()
+
+
+USER_AGENT = "Aliana/1.0 (+network recon; read-only RMM sync)"
+
+
+def log(msg):
+    """One line in the service log (journalctl -u aliana). Never pass secrets."""
+    print("aliana rmm:", msg, flush=True)
+
+
+def _redact(url):
+    return url.split("?")[0]
+
+
+def _error_detail(e):
+    """The useful part of an API error body: OAuth error_description,
+    a JSON message, or the first bit of text."""
+    try:
+        raw = e.read().decode("utf-8", "ignore")
+    except Exception:
+        return ""
+    try:
+        j = json.loads(raw)
+        if isinstance(j, dict):
+            for k in ("error_description", "message", "error", "errorMessage"):
+                if j.get(k):
+                    return str(j[k])[:200]
+    except ValueError:
+        pass
+    return " ".join(raw.split())[:160]

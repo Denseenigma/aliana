@@ -638,6 +638,7 @@
     }
     $("rmm-status").innerHTML = t;
     $("rmm-kv").innerHTML = R.provider ? "<b>" + esc(R.label) + "</b>" : "Off";
+    if (!st.syncing && $("rmm-msg").textContent === "Saved. Syncing\u2026") msg(st.error ? "" : "Saved and synced.", true);
     clearTimeout(pollT);
     if (st.syncing) pollT = setTimeout(load, 1500);
   }
@@ -664,7 +665,12 @@
     var b = this; b.disabled = true; msg("Testing\u2026", true);
     post("/api/rmm/test", { provider: $("rmm-provider").value, values: values() }).then(function (d) {
       b.disabled = false;
-      if (d.ok) { msg(d.message, true); if (d.sites) renderSites(d.sites); }
+      if (d.ok) {
+        var lp = d.learned && d.learned.platform, sel = document.querySelector('#rmm-fields [data-name="platform"]');
+        msg(d.message + (lp ? " Platform detected: " + lp + " \u2014 click Save to keep it." : ""), true);
+        if (lp && sel) sel.value = lp;
+        if (d.sites) renderSites(d.sites);
+      }
       else msg(d.error || "Test failed.");
     }).catch(function () { b.disabled = false; msg("Aliana didn't respond."); });
   });

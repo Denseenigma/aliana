@@ -19,6 +19,7 @@ import base64
 import datetime
 import os
 import time
+import urllib.parse
 
 from .base import Provider, RMMError, device
 
@@ -40,8 +41,12 @@ class Datto(Provider):
     has_sites = True
     fields = [
         {"name": "platform", "label": "Platform", "type": "select", "required": True,
-         "options": [(p, p.capitalize() + f"  ({p}-api.centrastage.net)") for p in PLATFORMS],
-         "help": "Shown in Datto as the API URL, e.g. https://merlot-api.centrastage.net"},
+         "options": [("auto", "Auto-detect")] +
+                    [(p, p.capitalize() + f"  ({p}-api.centrastage.net)") for p in PLATFORMS],
+         "help": "Datto shows it next to the API keys as the API URL, e.g. https://merlot-api.centrastage.net. "
+                 "Auto-detect tries each platform."},
+        {"name": "api_url", "label": "API URL (optional)", "type": "text",
+         "help": "Paste the API URL from Datto to override the platform, e.g. for a new region."},
         {"name": "api_key", "label": "API key", "type": "password", "required": True},
         {"name": "api_secret", "label": "API secret key", "type": "password", "required": True},
     ]
@@ -50,38 +55,111 @@ class Datto(Provider):
         super().__init__(config)
         self._token = None
         self._token_time = 0
+        self._base = None
+        self.learned = {}     # non-secret settings worked out here (detected platform), saved by rmm/__init__
+
+    @staticmethod
+    def clean_url(u):
+        """'merlot-api.centrastage.net/api/' -> 'https://merlot-api.centrastage.net'."""
+        u = (u or "").strip().rstrip("/")
+        if not u:
+            return ""
+        if "://" not in u:
+            u = "https://" + u
+        for tail in ("/api/v2", "/api", "/auth/oauth/token"):
+            if u.lower().endswith(tail):
+                u = u[:-len(tail)]
+        return u.rstrip("/")
+
+    def _candidates(self):
+        override = os.environ.get("ALIANA_DATTO_API_URL") or self.config.get("api_url")
+        if override:
+            return [(None, self.clean_url(override))]
+        # The chosen platform first; the others after it, so keys from a
+        # different platform than the one picked still work (and get learned)
+        p = self.config.get("platform")
+        order = ([p] if p in PLATFORMS else []) + [q for q in PLATFORMS if q != p]
+        return [(q, f"https://{q}-api.centrastage.net") for q in order]
 
     @property
     def base(self):
-        # ALIANA_DATTO_API_URL overrides the platform (new Datto regions, or testing)
-        override = os.environ.get("ALIANA_DATTO_API_URL")
-        if override:
-            return override.rstrip("/")
-        p = self.config.get("platform")
-        if p not in PLATFORMS:
-            raise RMMError("Choose your Datto RMM platform (from the API URL).")
-        return f"https://{p}-api.centrastage.net"
+        if self._base is None:
+            self._auth()
+        return self._base
+
+    def where(self):
+        return urllib.parse.urlparse(self._base or "").netloc or "Datto"
 
     def _auth(self):
         # Tokens last 100 hours; refresh well before that
         if self._token and time.monotonic() - self._token_time < 3600:
             return self._token
-        key, secret = self.config.get("api_key"), self.config.get("api_secret")
+        key, secret = (self.config.get("api_key") or "").strip(), (self.config.get("api_secret") or "").strip()
         if not key or not secret:
             raise RMMError("Enter the Datto API key and secret.")
         basic = base64.b64encode(b"public-client:public").decode()
-        r = self.http_json("POST", self.base + "/auth/oauth/token",
-                           headers={"Authorization": "Basic " + basic,
-                                    "Content-Type": "application/x-www-form-urlencoded",
-                                    "Accept": "application/json"},
-                           data={"grant_type": "password", "username": key, "password": secret})
-        tok = (r or {}).get("access_token")
-        if not tok:
-            raise RMMError("Datto didn't return an access token -- check the key and secret.")
-        self._token, self._token_time = tok, time.monotonic()
-        return tok
+        cands = self._candidates()
+        tried, last, first = [], None, None
+        for plat, base in cands:
+            try:
+                r = self.http_json("POST", base + "/auth/oauth/token",
+                                   headers={"Authorization": "Basic " + basic,
+                                            "Content-Type": "application/x-www-form-urlencoded",
+                                            "Accept": "application/json"},
+                                   data={"grant_type": "password", "username": key, "password": secret})
+            except RMMError as e:
+                if len(cands) == 1:
+                    raise RMMError("Signing in to Datto failed: " + str(e))
+                st = getattr(e, "status", None)
+                if st in (403, 429) and plat == cands[0][0]:
+                    raise RMMError("Signing in to Datto failed: " + str(e))   # blocked/limited: don't hammer the rest
+                tried.append(f"{plat} {st or 'unreachable'}")
+                first = first or (e if getattr(e, "detail", None) else None)
+                last = last if (last and getattr(last, "status", None)) else e
+                continue
+            tok = (r or {}).get("access_token")
+            if not tok:
+                raise RMMError(f"{urllib.parse.urlparse(base).netloc} didn't return an access token "
+                               "-- is the API URL right?")
+            self._token, self._token_time, self._base = tok, time.monotonic(), base
+            if plat and self.config.get("platform") != plat:
+                self.learned["platform"] = plat
+                self.config["platform"] = plat
+            return tok
+        if all(t.endswith("unreachable") for t in tried):
+            raise RMMError("Can't reach Datto RMM from the Pi: " + str(last))
+        said = f" Datto said: {first.detail}." if first is not None else ""
+        raise RMMError("No Datto platform accepted this API key and secret (" + ", ".join(tried) + ")." + said + " "
+                       "Check the key and secret were copied in full (regenerating keys in Datto invalidates "
+                       "the old pair), the user is active, and API access is on in Setup > Global Settings "
+                       "> Access Control.")
+
+    def http_error_message(self, code, detail, url=""):
+        host = urllib.parse.urlparse(url).netloc or "Datto"
+        why = f" Datto said: {detail}." if detail else ""
+        if "/auth/oauth/token" in url:
+            if code in (400, 401):
+                return (f"{host} rejected the API key/secret (HTTP {code}).{why} Check: the platform matches the "
+                        "API URL shown in Datto (or use Auto-detect), the key and secret were copied in full, the "
+                        "user is active, and API access is enabled in Setup > Global Settings > Access Control.")
+            if code == 403:
+                return (f"{host} refused the sign-in (HTTP 403).{why} This usually means the Pi's IP is "
+                        "temporarily blocked after too many requests -- wait 5 minutes.")
+        else:
+            if code == 401:
+                return f"{host}: the sign-in token was refused (HTTP 401).{why} Try again; re-enter the keys if it persists."
+            if code == 403:
+                return (f"{host} denied access to {urllib.parse.urlparse(url).path} (HTTP 403).{why} Give the "
+                        "API user a Security Level that can view Sites and Devices, or wait 5 minutes if it was "
+                        "rate limited.")
+            if code == 404:
+                return f"{host}: {urllib.parse.urlparse(url).path} not found (HTTP 404) -- is the API URL right?"
+        if code == 429:
+            return "Datto rate limit hit (HTTP 429). Wait a minute and try again."
+        return f"Datto API error from {host} (HTTP {code}).{why}"
 
     def _get_pages(self, path, item_key, max_pages=200):
+        self._auth()
         url = self.base + "/api" + path + ("&" if "?" in path else "?") + "max=250"
         items = []
         for _ in range(max_pages):
@@ -101,7 +179,7 @@ class Datto(Provider):
 
     def test(self):
         sites = self.sites()
-        return {"ok": True, "message": f"Connected to Datto RMM ({self.config.get('platform')}) -- "
+        return {"ok": True, "message": f"Connected to Datto RMM ({self.where()}) -- "
                                        f"{len(sites)} site{'s' if len(sites) != 1 else ''}.",
                 "sites": sorted(sites, key=lambda s: (s["name"] or "").lower())}
 

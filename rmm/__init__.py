@@ -24,6 +24,7 @@ import scanner
 import vault
 
 from .base import RMMError, Provider  # noqa: F401  (re-exported for providers)
+from .base import log as base_log
 from .datto import Datto
 
 PROVIDERS = {p.key: p for p in (Datto,)}
@@ -185,6 +186,8 @@ def save_config(provider, values, sites=None, site_names=None):
             v = old.get(f["name"])
         if isinstance(v, str):
             v = v.strip()
+        if f["name"] == "api_url" and v and hasattr(PROVIDERS[provider], "clean_url"):
+            v = PROVIDERS[provider].clean_url(v)
         if f["type"] == "select" and v not in [o[0] for o in f["options"]]:
             v = None
         if f["type"] == "password" and v:
@@ -218,8 +221,31 @@ def _instance(provider=None, values=None):
     return PROVIDERS[key](cfg)
 
 
+def _remember(inst, key):
+    """Saves non-secret settings the provider worked out (e.g. the detected
+    Datto platform) -- only for the saved, active provider."""
+    learned = {k: v for k, v in (getattr(inst, "learned", None) or {}).items()
+               if k not in _secret_names(key)}
+    if not learned or key != get_provider_key():
+        return
+    cfg = get_config()
+    cfg.update(learned)
+    scanner._set_setting("rmm_config", json.dumps(cfg))
+
+
 def test(provider=None, values=None):
-    return _instance(provider, values).test()
+    key = provider or get_provider_key()
+    inst = _instance(provider, values)
+    try:
+        r = inst.test()
+    except RMMError as e:
+        base_log(f"test failed: {e}")
+        raise
+    if getattr(inst, "learned", None):
+        r["learned"] = dict(inst.learned)
+        if not values or all(values.get(n) in (None, "", "__saved__") for n in _secret_names(key)):
+            _remember(inst, key)   # testing the saved keys: keep what was found
+    return r
 
 
 # ---------------------------------------------------------------- sync
@@ -237,7 +263,9 @@ def sync():
     started = datetime.datetime.now().isoformat()
     try:
         cfg = get_config()
-        devices = _instance(key).fetch(cfg.get("sites") or None)
+        inst = _instance(key)
+        devices = inst.fetch(cfg.get("sites") or None)
+        _remember(inst, key)
         conn = _db()
         conn.execute("DELETE FROM rmm_devices WHERE provider = ?", (key,))
         conn.executemany(
@@ -253,6 +281,7 @@ def sync():
         _cache.clear()
         return {"ok": True, "count": len(devices)}
     except RMMError as e:
+        base_log(f"sync failed: {e}")
         _set_status(error=str(e), last_attempt=started)
         return {"ok": False, "error": str(e)}
     except Exception as e:
