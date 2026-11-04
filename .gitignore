@@ -14,3 +14,13 @@ __pycache__/
 .env
 .env.*
 secret*.json
+
+# Access control (auth.py) -- normally in ~/.config/aliana/, outside the repo
+auth.json
+*.tmp
+
+# Downloads from Aliana: scan / history / device exports and recovery codes
+# (they contain your network's IPs, MACs and hostnames)
+aliana-*.csv
+aliana-*.json
+aliana-recovery-codes*.txt
