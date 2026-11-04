@@ -281,7 +281,7 @@ def _summarise(mac, rows, latest_times):
                  "os_name": os_row["os_name"] if os_row else None,
                  "os_type": os_row["os_type"] if os_row else None}
     present = any(r["finished_at"] == latest_times.get(r["subnet"]) for r in rows if r["scope"] != "host")
-    return {
+    res = {
         "mac": mac,
         "vendor": vendor,
         "hostname": hostname,
@@ -302,6 +302,10 @@ def _summarise(mac, rows, latest_times):
         "flags": insights.host_flags(host_like),
         "_host": host_like,
     }
+    if res["device"].get("name"):
+        res["label_name"] = res["device"]["name"]
+        res["hostname"] = res["device"]["name"]
+    return res
 
 
 def _heard_view(rec):
@@ -311,7 +315,8 @@ def _heard_view(rec):
     info = rec["info"]
     return {"first": rec["first_seen"], "last": rec["last_seen"], "recent": _ts(rec["last_seen"]) >= time.time() - 3600,
             "ip": rec["ip"], "iface": rec["iface"],
-            "kinds": [k.upper() if k != "netbios" else "NetBIOS" for k in ("dhcp", "arp", "mdns", "ssdp", "netbios") if k in info],
+            "kinds": [{"netbios": "NetBIOS", "stack": "TCP replies"}.get(k, k.upper())
+                      for k in ("dhcp", "arp", "mdns", "ssdp", "netbios", "stack") if k in info],
             "dhcp": info.get("dhcp"), "ips": info.get("ips") or {}}
 
 
@@ -330,12 +335,13 @@ def _heard_only(rec):
     host_like = {"mac": mac, "ip": rec["ip"], "vendor": v, "hostname": ident.get("name"), "ports": [],
                  "ident": ident, "os_name": None, "os_type": None}
     ips = rec["info"].get("ips") or {}
+    dev = insights.classify_host(host_like)
     return {
-        "mac": mac, "vendor": v, "hostname": ident.get("name"), "ip": rec["ip"],
+        "mac": mac, "vendor": v, "hostname": dev.get("name") or ident.get("name"), "ip": rec["ip"],
         "ips": sorted(ips, key=ips.get, reverse=True), "hostnames": [ident["name"]] if ident.get("name") else [],
         "networks": [], "first_seen": rec["first_seen"], "last_seen": rec["last_seen"], "sightings": 0,
         "present": False, "heard": _heard_view(rec), "heard_only": True, "open_ports": [], "os_name": None,
-        "ident": ident, "device": insights.classify_host(host_like), "flags": [], "_host": host_like,
+        "ident": ident, "device": dev, "flags": [], "_host": host_like,
     }
 
 

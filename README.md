@@ -14,7 +14,9 @@ aliana/
   wifi.py              Wi-Fi management via NetworkManager (nmcli)
   qr.py                tiny built-in QR code generator (no dependencies)
   auth.py              access control: authenticator-app sign-in, recovery codes, erase & reset
-  passive.py           passive discovery: listens for DHCP / ARP / mDNS / SSDP / NetBIOS / LLDP
+  passive.py           passive discovery: listens for DHCP / ARP / mDNS / SSDP / NetBIOS / LLDP + TCP replies
+  labels.py            your own device labels (overrule the triad)
+  fpdb.py              FINGERPRINT signature library: stack signatures, app chatter, mismatches
   requirements.txt
   aliana.service       systemd unit (expects the repo cloned at ~/aliana)
   setup.sh             one-time/after-pull install steps (Pi only)
@@ -134,6 +136,53 @@ every scan; changes save immediately:
 - **Never-probe ports** -- add/remove ports or ranges that are reported as
   open but never get service-identification probes (default `9999`;
   `ALIANA_NO_PROBE_PORTS` sets the default for a fresh install).
+
+## Triad decision (three systems vote)
+
+Every device's type is decided by three independent systems, each using only
+its own evidence:
+
+| System | Evidence |
+|---|---|
+| **1 SCAN** | what it serves when asked: open ports, services, web pages, the NetBIOS / mDNS / UPnP / DNS lookups Aliana sends, and its scanned MAC (maker, virtual / randomized prefixes, gateway) |
+| **2 LISTEN** | what it announced on its own (passive discovery): DHCP, mDNS / UPnP / NetBIOS announcements |
+| **3 FINGERPRINT** | how it behaves: its network stack (starting TTL, IP ID pattern, TCP options, packet size), reply timing (**wired vs wireless**, when the Pi is on a cable), nmap's OS fingerprint (Deep scans), and the **RMM** record when there is one |
+
+FINGERPRINT reads the replies to Aliana's own scans through the passive
+listener, so it sends nothing extra. Its **signature library** (`fpdb.py`)
+turns those traits into named answers ("Windows 10 / 11", "Windows 7 / 8",
+"macOS / iOS", "Linux 4.19+", "Cisco IOS", "small embedded stack") and
+flags **Old OS** when the stack matches an out-of-support Windows / Linux.
+It also listens to **background chatter** -- broadcasts apps make on their own:
+Dropbox, Steam, Spotify, BitTorrent (flagged), Syncthing, SSDP searches (their
+user agent names the OS: Windows 10, iOS 17, Android, Xbox, smart TVs),
+WS-Discovery (ONVIF cameras, printers, Windows), Windows browser
+announcements (OS version, domain controllers, Samba servers), Ubiquiti and
+MikroTik discovery (model, firmware), LIFX / Tuya / Hue, BACnet. When the
+MAC maker doesn't fit how the device behaves (Apple hardware with a Windows
+stack, a printer maker's MAC acting like a PC) the decision board shows a
+**mismatch** warning: Boot Camp, a VM, or a changed MAC. On its own it often only knows the
+family ("Windows", "Unix-like", "network gear / embedded"); that's enough to
+confirm -- or dispute -- a specific answer from the others.
+
+Each system votes for its best-supported answer (or abstains if it has
+nothing better than a weak hint). Broad and specific answers agree
+("Unix-like" + "Apple computer"; "Computer" + "Windows computer"). Then:
+
+- **Unanimous** (3/3) or **Confirmed** (2/3) -- high confidence.
+- **Single source** -- only one system has an answer; medium at best. A weak
+  contrary hint (like a randomized MAC) doesn't count as a dispute.
+- **Disputed** -- systems disagree; the strongest answer is shown, low
+  confidence unless it's very strong.
+
+**Your label** overrules all three: on a device page, set its type (plus an
+optional name and note). The decision board shows *SET BY YOU* and what the
+triad would have said.
+
+The device page shows the full decision board (the FINGERPRINT card lists
+what it measured); dashboard cards and the Devices table show three small
+hexes (green = agrees, red = dissents, dark = no answer), and the latest
+scan has a Triad bar.
 
 ## Passive discovery (listening only)
 

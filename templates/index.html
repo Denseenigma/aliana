@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+{% import "_triad.html" as triad with context %}<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -551,6 +551,16 @@
     background: #000;
   }
   .mirror-hint { color: var(--muted); font-size: 0.8rem; letter-spacing: 0.1em; text-transform: uppercase; }
+{% include "_triad.css.html" %}
+  .tri-strip { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 14px; margin: -6px 0 16px; }
+  .tri-strip-l { font-family: var(--title); font-size: 1.1rem; color: var(--accent); letter-spacing: 0.06em; text-transform: uppercase; }
+  .tri-seg { flex: 1; min-width: 120px; display: flex; gap: 2px; height: 10px; }
+  .tri-seg i { display: block; min-width: 6px; }
+  .tri-seg .s-unanimous { background: var(--green); }
+  .tri-seg .s-confirmed { background: #2fae2f; }
+  .tri-seg .s-single { background: var(--accent); }
+  .tri-seg .s-disputed { background: var(--red); }
+  .tri-seg .s-none { background: #3a2412; }
 </style>
 </head>
 <body>
@@ -668,6 +678,17 @@
           <div class="tile {{ 'hot' if scan.flag_counts.high else 'warm' if scan.flag_counts.medium else '' }}" title="Exposure flags: services worth a follow-up"><span class="label">Findings</span><div class="num glow">{{ scan.flag_total }}{% if scan.flag_counts.high %}<small>{{ scan.flag_counts.high }} high</small>{% endif %}</div></div>
           <div class="tile"><span class="label">Finished</span><div class="num small">{{ scan.finished_at | ago }}</div></div>
         </div>
+        {% set tc = scan.triad or {} %}
+        {% if scan.hosts %}
+        <div class="tri-strip" title="Three systems vote on each device: SCAN (active probing), LISTEN (what it announced), RECORD (MAC registry, routing table, RMM). Two agreeing confirm the answer.">
+          <span class="tri-strip-l">Triad</span>
+          <span class="tri-seg">{% for k in ('unanimous', 'confirmed', 'single', 'disputed', 'none') %}{% if tc[k] %}<i class="s-{{ k }}" style="flex:{{ tc[k] }}"></i>{% endif %}{% endfor %}</span>
+          <span class="kv">Confirmed <b class="ok">{{ (tc.unanimous or 0) + (tc.confirmed or 0) }}</b></span>
+          <span class="kv">Single source <b>{{ tc.single or 0 }}</b></span>
+          <span class="kv">Disputed <b class="{{ 'warn' if tc.disputed else '' }}">{{ tc.disputed or 0 }}</b></span>
+          {% if tc.none %}<span class="kv">No data <b>{{ tc.none }}</b></span>{% endif %}
+        </div>
+        {% endif %}
         {% set ch = scan.changes %}
         {% if ch and ch.count %}
         <details class="changes" {{ 'open' if ch.count <= 6 else '' }}>
@@ -701,7 +722,7 @@
           <div class="host {{ 'linked' if host.mac else '' }}" id="host-{{ host.ip | replace('.', '-') }}"
                {% if host.mac %}data-href="{{ url_for('device_page', mac=host.mac) }}" title="Open this device's history"{% endif %}>
             <div class="host-top">
-              <span class="hexb t-{{ host.device.type }} c-{{ host.device.confidence }}" title="{{ host.device.label }} ({{ host.device.confidence }} confidence){% for e in host.device.evidence %}&#10;&middot; {{ e.why }}{% endfor %}">{{ host.device.code }}</span>
+              <span class="hexb t-{{ host.device.type }} c-{{ host.device.confidence }}" title="{{ host.device.label }} ({{ host.device.confidence }} confidence){% for e in host.device.evidence %}&#10;&middot; {{ e.why }}{% endfor %}">{{ host.device.code }}</span>{{ triad.pips(host.device.consensus) }}
               <span class="ip">{{ host.ip }}</span>
               {% if host.is_new %}<span class="tag new" title="Not seen in the previous scan">New</span>{% endif %}
               {% if host.hostname %}<span class="name">{{ host.hostname }}</span>{% endif %}

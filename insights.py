@@ -22,6 +22,7 @@ import scanner
 import re as _re
 
 import identify as _identify
+import fpdb as _fpdb
 
 # key -> (short code shown in the hex badge, label)
 TYPES = {
@@ -42,6 +43,10 @@ TYPES = {
     "media":   ("TV",  "TV / media / speaker"),
     "iot":     ("IOT", "Smart home / IoT"),
     "vm":      ("VM",  "Virtual machine"),
+    # broad families -- only the FINGERPRINT system votes these, so they
+    # mostly confirm (or dispute) a more specific answer
+    "unix":    ("NIX", "Unix-like (Linux / Apple / Android)"),
+    "embedded": ("EMB", "Network gear / embedded"),
     "unknown": ("?",   "Unknown device"),
 }
 
@@ -261,50 +266,214 @@ def _model_from(ident, host):
     return None
 
 
+# ---------------------------------------------------------------- the triad
+#
+# Three independent systems each look at their own evidence and vote on what
+# a device is. Two agreeing systems confirm the answer.
+#
+#   SCAN         what the device serves when asked: open ports, services,
+#                web pages, the NetBIOS / mDNS / UPnP / DNS lookups Aliana
+#                sent, and its scanned MAC (maker, virtual / random prefixes).
+#   LISTEN       what it announced on its own, heard by passive.py: DHCP,
+#                mDNS / UPnP / NetBIOS announcements.
+#   FINGERPRINT  how it behaves: network-stack traits (TTL, IP ID, TCP
+#                options), reply timing (wired / wireless), nmap's OS
+#                fingerprint, and the RMM record when there is one.
+#
+# Your own label (labels.py) overrules all three.
+
+SYSTEMS = [
+    {"key": "scan", "name": "SCAN", "num": "1", "desc": "What it serves when asked: ports, services, web pages, name lookups, its MAC"},
+    {"key": "listen", "name": "LISTEN", "num": "2", "desc": "What it announced on its own: DHCP, mDNS, UPnP, NetBIOS"},
+    {"key": "fingerprint", "name": "FINGERPRINT", "num": "3",
+     "desc": "How it behaves: network stack, timing, OS fingerprint, RMM record"},
+]
+MIN_VOTE = 40     # a system whose best clue scores below this abstains
+DISSENT_MIN = 55  # weaker votes can confirm an answer but not dispute it
+
+# Types that agree with each other: a broad answer ("a computer",
+# "Unix-like") and a specific one ("a Mac") are the same answer.
+_COMPAT = {
+    "pc": {"windows", "linux", "apple", "vm", "server", "unix", "pi"},
+    "unix": {"linux", "apple", "mobile", "pi", "nas", "media", "iot", "server", "camera", "printer", "phone",
+             "access", "power", "network", "vm", "embedded"},
+    "embedded": {"network", "printer", "access", "camera", "phone", "power", "iot", "media", "nas"},
+    "linux": {"pi", "server", "nas", "vm"},
+    "windows": {"vm", "server"},
+    "server": {"linux", "vm"},
+    "iot": {"camera", "media", "power", "access"},
+}
+_RANK = {"pc": 1, "unix": 1, "embedded": 1, "iot": 2, "linux": 2, "server": 4}
+
+
+def _compatible(a, b):
+    return a == b or b in _COMPAT.get(a, ()) or a in _COMPAT.get(b, ())
+
+
+def _specific(a, b):
+    """Of two compatible types, the more specific one."""
+    return a if _RANK.get(a, 3) >= _RANK.get(b, 3) else b
+
+
+def _median(xs):
+    xs = sorted(xs)
+    n = len(xs)
+    return (xs[n // 2] if n % 2 else (xs[n // 2 - 1] + xs[n // 2]) / 2) if xs else None
+
+
+def _fingerprint_clues(host, ident, private):
+    """(clues [(type, score, why)], facts [str]) from the network stack and timing."""
+    pv = ident.get("passive") or {}
+    st = pv.get("stack") or {}
+    rt = pv.get("rtt") or {}
+    clues, facts = [], []
+    ttl0 = st.get("ttl0")
+    if ttl0 == 128:
+        clues.append(("windows", 72, "network stack: starts at TTL 128 (Windows)"))
+    elif ttl0 == 64:
+        clues.append(("unix", 60, "network stack: starts at TTL 64 (Linux / Apple / Android / most appliances)"))
+    elif ttl0 == 255:
+        clues.append(("embedded", 62, "network stack: starts at TTL 255 (network gear / embedded)"))
+    if ttl0:
+        facts.append(f"TTL {st.get('ttl')} (starts {ttl0}){' · DF' if st.get('df') else ''}")
+    ids = st.get("ipids") or []
+    if len(ids) >= 3:
+        diffs = [(b - a) % 65536 for a, b in zip(ids, ids[1:])]
+        if all(i == 0 for i in ids):
+            pat = "always 0"
+            if ttl0 == 64:
+                clues.append(("unix", 64, "IP ID always 0 (Linux / Android)"))
+        elif all(0 < d < 2048 for d in diffs):
+            pat = "counts up"
+            if ttl0 == 128:
+                clues.append(("windows", 76, "IP ID counts up with TTL 128 (Windows)"))
+        else:
+            pat = "random"
+        facts.append(f"IP ID {pat}")
+    syn = st.get("syn") or {}
+    if syn.get("opts"):
+        facts.append(f"its own connections: window {syn.get('win')}, options {syn['opts']}")
+    sig = _fpdb.stack_signature(st)
+    if sig:
+        t = "mobile" if sig["type"] == "apple" and private else sig["type"]
+        clues.append((t, sig["score"], f"looks like {sig['name']} ({sig['basis']})"))
+        facts.insert(0, f"stack signature: {sig['name']}{' — OUT OF SUPPORT' if sig['old'] else ''}")
+    cc, cf, old = _fpdb.chatter_clues(pv.get("chatter"))
+    clues += cc
+    facts += cf
+    if old and not (sig and sig["old"]):
+        facts.append(f"announces {old} — OUT OF SUPPORT")
+    sa = st.get("synack") or {}
+    mss = syn.get("mss") or sa.get("mss")
+    if mss and mss < 1000:
+        clues.append(("embedded", 58, f"tiny packet size (MSS {mss}): small embedded TCP stack"))
+    elif mss and mss < 1400:
+        facts.append(f"MSS {mss}: behind a VPN / tunnel")
+    samples = rt.get("samples") or []
+    iface = rt.get("iface") or ""
+    if len(samples) >= 3:
+        med = _median(samples)
+        spread = max(samples) - min(samples)
+        if iface.startswith("wl"):
+            facts.append(f"replies in {med:.1f} ms (the Pi is on Wi-Fi, so wired vs wireless can't be told)")
+        elif iface.startswith(("eth", "en")):
+            if med < 1.2 and spread < 3:
+                facts.append(f"wired: replies in {med:.2f} ms, steadily")
+            elif med > 2.5 or spread > 8:
+                facts.append(f"wireless: replies in {med:.1f} ms, varying by {spread:.0f} ms")
+                clues.append(("mobile", 42, f"replies like a Wi-Fi device ({med:.1f} ms, jittery)"))
+            else:
+                facts.append(f"replies in {med:.1f} ms")
+    return clues, facts
+
+
+def _rmm_clues(host):
+    try:
+        import rmm
+        m = rmm.match(host)
+    except Exception:
+        return []
+    if not m or m.get("status") != "managed":
+        return []
+    d = m.get("device") or {}
+    os_ = (d.get("os") or "").lower()
+    cat = (d.get("category") or "").lower()
+    src = f"{m.get('provider')}: {d.get('os') or d.get('category') or 'managed device'}"
+    if "server" in os_ or "server" in cat or "esxi" in cat:
+        return [("server", 90, src)]
+    if "windows" in os_:
+        return [("windows", 92, src)]
+    if "mac" in os_ or "darwin" in os_:
+        return [("apple", 92, src)]
+    if "linux" in os_ or "ubuntu" in os_ or "debian" in os_:
+        return [("linux", 88, src)]
+    if "printer" in cat:
+        return [("printer", 85, src)]
+    if "network" in cat:
+        return [("network", 85, src)]
+    if cat in ("desktop", "laptop", "workstation"):
+        return [("pc", 80, src)]
+    return [("pc", 60, src)]
+
+
 def classify_host(host):
-    """Returns {"type", "code", "label", "why", "model", "confidence", "evidence"}:
-    a best guess at what the device is, from every clue available."""
+    """Returns {"type", "code", "label", "why", "model", "confidence", "evidence",
+    "consensus"}: each system's vote, and the decision."""
     ident = host.get("ident") or {}
+    private = ident.get("private_mac") or (host.get("mac") and _identify.is_private_mac(host["mac"]))
     vendor = (host.get("vendor") or ident.get("vendor_db") or "").lower()
-    if not vendor and host.get("mac") and not _identify.is_private_mac(host["mac"]):
+    if not vendor and host.get("mac") and not private:
         vendor = (_identify.vendor_for(host["mac"]) or "").lower()
     ports = {p["port"] for p in host.get("ports", []) if p.get("state") == "open"}
     services_txt = " ".join((p.get("service") or "") + " " + (p.get("product") or "")
                             for p in host.get("ports", []) if p.get("state") == "open").lower()
     os_name = (host.get("os_name") or "").lower()
     os_type = (host.get("os_type") or "").lower()
-    names = [n for n in [host.get("hostname")] + list((ident.get("names") or {}).values()) if n]
     md = ident.get("mdns") or {}
     txt = md.get("txt") or {}
     up = ident.get("upnp") or {}
     nb = ident.get("netbios") or {}
-    clues = []   # (score, type, why)
+    md_sys = "listen" if md.get("passive") else "scan"
+    up_sys = "listen" if up.get("passive") else "scan"
+    nb_sys = "listen" if nb.get("passive") else "scan"
+    clues = []   # (score, type, why, system)
 
-    def add(t, score, why):
-        clues.append((score, t, why))
+    def add(t, score, why, sys):
+        clues.append((score, t, why, sys))
 
-    # -- strongest: what the device says about itself
+    facts = []
+    # -- LISTEN: the DHCP request it broadcast
     for t, sc, why in _dhcp_clues((ident.get("passive") or {}).get("dhcp") or {}, host, ident):
-        add(t, sc, why)
+        add(t, sc, why, "listen")
+    # -- SCAN: it's the address Aliana routes through
     if ident.get("gateway"):
-        add("network", 96, "default gateway")
+        add("network", 96, "default gateway (routing table)", "scan")
+    # -- FINGERPRINT: stack + timing, RMM
+    fc, ff = _fingerprint_clues(host, ident, private)
+    for t, sc, why in fc:
+        add(t, sc, why, "fingerprint")
+    facts += ff
+    for t, sc, why in _rmm_clues(host):
+        add(t, sc, why, "fingerprint")
+        facts.append(why)
+    # -- SCAN or LISTEN, depending on whether we asked or it announced
     svcs = " ".join(md.get("services") or []) + " "
     for keys, t, sc, why in _MDNS:
         if any(k in svcs for k in keys):
-            add(t, sc, f"mDNS: {why}")
-    model_hint = " ".join(str(txt.get(k, "")) for k in ("am", "model", "md")).lower()
+            add(t, sc, f"mDNS: {why}", md_sys)
+    model_hint = " ".join(str(txt.get(k, "")) for k in ("am", "model", "md", "rpMd")).lower()
     if _re.search(r"iphone|ipad|ipod|watch", model_hint):
-        add("mobile", 94, f"Apple model {txt.get('model') or txt.get('am')}")
+        add("mobile", 94, f"Apple model {txt.get('model') or txt.get('am') or txt.get('rpMd')}", md_sys)
     elif _re.search(r"macbook|imac|macmini|macpro|mac\d|mac1|macstudio", model_hint):
-        add("apple", 94, f"Apple model {txt.get('model') or txt.get('am')}")
+        add("apple", 94, f"Apple model {txt.get('model') or txt.get('am') or txt.get('rpMd')}", md_sys)
     elif _re.search(r"appletv|audioaccessory|homepod", model_hint):
-        add("media", 94, "Apple TV / HomePod")
+        add("media", 94, "Apple TV / HomePod", md_sys)
     if txt.get("usb_MDL") or txt.get("ty"):
-        add("printer", 93, f"printer model {txt.get('usb_MDL') or txt.get('ty')}")
+        add("printer", 93, f"printer model {txt.get('usb_MDL') or txt.get('ty')}", md_sys)
     dt = (up.get("device_type") or "").lower()
     for frag, t, sc in _UPNP:
         if frag in dt and t:
-            add(t, sc, f"UPnP {up.get('device_type', '').split(':')[-2] if ':' in up.get('device_type', '') else dt}")
+            add(t, sc, f"UPnP {up.get('device_type', '').split(':')[-2] if ':' in up.get('device_type', '') else dt}", up_sys)
             break
     web_blob = " ".join(" ".join(str(v) for k, v in h.items() if k in ("title", "server", "realm", "cert_cn", "cert_org"))
                         for h in (ident.get("http") or {}).values())
@@ -312,92 +481,179 @@ def classify_host(host):
     for t, sc, rx in _WEB:
         m = rx.search(web_blob)
         if m:
-            add(t, sc, f"web page: “{m.group(0)}”")
+            add(t, sc, f"web page: “{m.group(0)}”", "scan")
             break
     for t, sc, rx in _WEB:
         m = rx.search(up_blob)
         if m:
-            add(t, sc - 5, f"UPnP: “{m.group(0)}”")
+            add(t, sc - 5, f"UPnP: “{m.group(0)}”", up_sys)
             break
     if nb:
         if ports & {22} and not ports & {135, 445, 3389} and "linux" in os_name:
-            add("linux", 70, "Samba (NetBIOS) on Linux")
+            add("linux", 70, "Samba (NetBIOS) on Linux", nb_sys)
         else:
-            add("windows", 82 if not ident.get("private_mac") else 80, f"NetBIOS name {nb.get('name')}")
-    # -- ports / OS / services
+            add("windows", 82 if not private else 80, f"NetBIOS name {nb.get('name')}", nb_sys)
+    # -- SCAN: ports / OS / services
     for t, sc, why in _port_clues(ports):
-        add(t, sc, why)
+        add(t, sc, why, "scan")
     if "printer" in services_txt or "jetdirect" in services_txt or "ipp" in services_txt.split():
-        add("printer", 85, "printing service")
+        add("printer", 85, "printing service", "scan")
     if "rtsp" in services_txt:
-        add("camera", 70, "RTSP service")
+        add("camera", 70, "RTSP service", "scan")
     if "printer" in os_type:
-        add("printer", 70, "OS fingerprint")
+        add("printer", 70, "nmap OS fingerprint", "fingerprint")
     if any(k in os_type for k in ("switch", "router", "firewall", "wap", "broadband", "bridge")):
-        add("network", 70, "OS fingerprint")
+        add("network", 70, "nmap OS fingerprint", "fingerprint")
     if "webcam" in os_type or "camera" in os_type:
-        add("camera", 70, "OS fingerprint")
+        add("camera", 70, "nmap OS fingerprint", "fingerprint")
     if "phone" in os_type and "voip" in os_type:
-        add("phone", 70, "OS fingerprint")
+        add("phone", 70, "nmap OS fingerprint", "fingerprint")
     if "windows" in os_name:
-        add("windows", 72, "OS fingerprint: Windows")
+        add("windows", 72, "nmap OS fingerprint: Windows", "fingerprint")
     if _re.search(r"mac os|macos|darwin", os_name):
-        add("apple", 70, "OS fingerprint: macOS")
+        add("apple", 70, "nmap OS fingerprint: macOS", "fingerprint")
     if _re.search(r"\bios\b|iphone", os_name):
-        add("mobile", 70, "OS fingerprint: iOS")
+        add("mobile", 70, "nmap OS fingerprint: iOS", "fingerprint")
     if "android" in os_name:
-        add("mobile", 70, "OS fingerprint: Android")
-    if ("linux" in os_name or "unix" in os_name) and not clues:
-        add("linux", 50, "OS fingerprint: Linux")
-    # -- names
-    for n in names:
+        add("mobile", 70, "nmap OS fingerprint: Android", "fingerprint")
+    if ("linux" in os_name or "unix" in os_name) and not any(c[3] == "fingerprint" and c[0] >= 70 for c in clues):
+        add("linux", 50, "nmap OS fingerprint: Linux", "fingerprint")
+    # -- names, credited to whichever system learned them
+    names = ident.get("names") or {}
+    name_src = {"netbios": nb_sys, "mdns": md_sys, "mdns_instance": md_sys, "upnp": up_sys,
+                "dns": "scan", "dhcp": "listen"}
+    named = []
+    for k, n in names.items():
+        if n and (n, name_src.get(k, "scan")) not in named:
+            named.append((n, name_src.get(k, "scan")))
+    if host.get("hostname") and not any(n == host["hostname"] for n, _ in named):
+        named.append((host["hostname"], "scan"))
+    for n, sys_ in named:
         for t, sc, rx in _NAMES:
             if rx.search(n):
-                add(t, sc, f"name “{n}”")
+                add(t, sc, f"name “{n}”", sys_)
                 break
-    # -- vendor
+    # -- SCAN: what its scanned MAC says (registries)
     for t, sc, frags in _VENDORS:
         hit = next((f for f in frags if f in vendor), None)
         if hit:
-            add(t, sc, f"maker {host.get('vendor') or ident.get('vendor_db')}")
+            add(t, sc, f"maker {host.get('vendor') or ident.get('vendor_db')}", "scan")
             break
     mac_hex = _re.sub(r"[^0-9A-F]", "", (host.get("mac") or "").upper())
     if mac_hex[:6] in ("00155D",):
-        add("vm", 85, "Hyper-V virtual network adapter")
+        add("vm", 85, "Hyper-V virtual network adapter", "scan")
     elif mac_hex[:6] in ("000C29", "005056", "000569"):
-        add("vm", 85, "VMware virtual network adapter")
+        add("vm", 85, "VMware virtual network adapter", "scan")
     elif mac_hex[:6] in ("080027", "0A0027"):
-        add("vm", 85, "VirtualBox virtual network adapter")
+        add("vm", 85, "VirtualBox virtual network adapter", "scan")
     elif mac_hex[:6] in ("525400",):
-        add("vm", 80, "KVM/QEMU virtual network adapter")
-    if ident.get("private_mac") or (host.get("mac") and _identify.is_private_mac(host["mac"])):
-        add("mobile", 48, "private (randomized) MAC — phones, tablets and laptops use these")
+        add("vm", 80, "KVM/QEMU virtual network adapter", "scan")
+    if private:
+        add("mobile", 48, "private (randomized) MAC — phones, tablets and laptops use these", "scan")
 
     model = _model_from(ident, host)
-    if not clues:
+    consensus = _decide(clues)
+    vend = next(((c[1], c[0]) for c in clues if c[3] == "scan" and c[2].startswith("maker ") and c[0] >= 40), None)
+    fpv = next((v for v in consensus["votes"] if v["system"] == "fingerprint" and not v["abstain"]), None)
+    if vend and fpv:
+        mm = _fpdb.mismatch(vend[0], host.get("vendor") or ident.get("vendor_db"), fpv["type"], fpv["score"], _compatible)
+        if mm:
+            consensus["mismatch"] = mm
+    consensus["facts"] = facts
+    try:
+        import labels
+        lab = labels.get(host.get("mac"))
+    except Exception:
+        lab = None
+    if lab and lab.get("type") in TYPES:
+        code, label = TYPES[lab["type"]]
+        consensus["override"] = {"type": lab["type"], "code": code, "label": label, "name": lab.get("name"),
+                                 "note": lab.get("note"), "at": lab.get("at"),
+                                 "agrees": consensus.get("type") is not None and _compatible(consensus["type"], lab["type"])}
+        ev = [{"type": lab["type"], "score": 100, "why": "set by you" + (f": {lab['note']}" if lab.get("note") else ""),
+               "system": "you"}]
+        for sc, tt, w, sy in sorted(clues, key=lambda c: -c[0])[:9]:
+            ev.append({"type": tt, "score": sc, "why": w, "system": sy})
+        return {"type": lab["type"], "code": code, "label": label, "why": "set by you", "model": model,
+                "confidence": "high", "evidence": ev, "consensus": consensus, "name": lab.get("name")}
+    if consensus["state"] == "none":
         code, label = TYPES["unknown"]
         maker = host.get("vendor") or ident.get("vendor_db")
         if maker:
             label = f"{maker.split(',')[0].split(' Co')[0].strip()} device"
         return {"type": "unknown", "code": code, "label": label, "why": "not enough information",
-                "model": model, "confidence": "none", "evidence": []}
-    clues.sort(key=lambda c: -c[0])
-    score, t, why = clues[0]
-    # agreeing clues raise confidence
-    agree = sum(1 for c in clues if c[1] == t)
-    conf = "high" if score >= 85 or (score >= 70 and agree >= 2) else "medium" if score >= 55 else "low"
+                "model": model, "confidence": "none", "evidence": [], "consensus": consensus}
+    t, why, score = consensus["type"], consensus["why"], consensus["score"]
+    state = consensus["state"]
+    if state in ("unanimous", "confirmed"):
+        conf = "high"
+    elif state == "single":
+        conf = "medium" if score >= 55 else "low"
+    else:   # disputed
+        conf = "medium" if score >= 85 else "low"
     code, label = TYPES[t]
     if t == "network" and ident.get("gateway"):
         label = "Router / gateway"
-    if t == "mobile" and clues[0][2].startswith("private"):
+    if t == "mobile" and why.startswith("private"):
         label = "Phone / tablet / laptop"
     seen, evidence = set(), []
-    for sc, tt, w in clues:
-        if w not in seen:
-            seen.add(w)
-            evidence.append({"type": tt, "score": sc, "why": w})
+    for sc, tt, w, sy in sorted(clues, key=lambda c: -c[0]):
+        if (w, sy) not in seen:
+            seen.add((w, sy))
+            evidence.append({"type": tt, "score": sc, "why": w, "system": sy})
     return {"type": t, "code": code, "label": label, "why": why, "model": model, "confidence": conf,
-            "evidence": evidence[:8]}
+            "evidence": evidence[:10], "consensus": consensus}
+
+
+def _decide(clues):
+    """Each system votes for its best-supported type; then the vote."""
+    votes = []
+    for sysd in SYSTEMS:
+        mine = sorted((c for c in clues if c[3] == sysd["key"]), key=lambda c: -c[0])
+        if not mine or mine[0][0] < MIN_VOTE:
+            votes.append({"system": sysd["key"], "name": sysd["name"], "num": sysd["num"], "type": None,
+                          "abstain": True, "why": mine[0][2] if mine else None,
+                          "score": mine[0][0] if mine else 0, "clues": len(mine)})
+            continue
+        # a system's own agreeing clues add a little weight
+        t = mine[0][1]
+        support = sum(1 for c in mine[1:] if _compatible(c[1], t) and c[0] >= MIN_VOTE)
+        for c in mine[1:]:
+            if _compatible(c[1], t):
+                t = _specific(t, c[1])
+        score = min(99, mine[0][0] + 4 * support)
+        code, label = TYPES[t]
+        votes.append({"system": sysd["key"], "name": sysd["name"], "num": sysd["num"], "type": t, "code": code,
+                      "label": label, "score": score, "why": mine[0][2], "clues": len(mine), "abstain": False})
+    cast = [v for v in votes if not v["abstain"]]
+    if not cast:
+        return {"state": "none", "votes": votes, "agree": 0, "voting": 0, "type": None, "why": None, "score": 0}
+    # best group of mutually compatible votes
+    best = None
+    for v in cast:
+        group = [w for w in cast if _compatible(w["type"], v["type"])]
+        t = v["type"]
+        for w in group:
+            t = _specific(t, w["type"])
+        key = (len(group), sum(w["score"] for w in group))
+        if best is None or key > best[0]:
+            best = (key, t, group)
+    (n, _), t, group = best
+    lead = max(group, key=lambda w: w["score"])
+    # a weak dissent (e.g. just "private MAC") doesn't dispute a strong answer
+    dissent = [w for w in cast if w not in group and w["score"] >= DISSENT_MIN]
+    if n >= 2:
+        state = "unanimous" if n == 3 else "confirmed"
+    elif not dissent:
+        state = "single"
+    else:
+        state = "disputed"
+    for v in votes:
+        v["agrees"] = (not v["abstain"]) and v in group
+        v["dissents"] = (not v["abstain"]) and v not in group
+    score = lead["score"] if n < 2 else min(99, max(w["score"] for w in group) + 5 * (n - 1))
+    return {"state": state, "votes": votes, "agree": n, "voting": len(cast), "type": t,
+            "code": TYPES[t][0], "label": TYPES[t][1], "why": lead["why"], "score": score}
 
 
 # ---------------------------------------------------------------- exposure flags
@@ -431,6 +687,16 @@ def host_flags(host):
         if label == "HTTP only" and nums & {443, 8443}:
             continue   # has an HTTPS interface too
         flags.append({"key": svc, "level": level, "label": label, "detail": detail, "ports": hit})
+    pv = (host.get("ident") or {}).get("passive") or {}
+    sig = _fpdb.stack_signature(pv.get("stack"))
+    _, _, old = _fpdb.chatter_clues(pv.get("chatter"))
+    old = (sig["name"] if sig and sig["old"] else None) or old
+    if old:
+        flags.append({"key": "old-os", "level": "medium", "label": "Old OS",
+                      "detail": f"Its network behaviour matches {old}, which no longer gets security updates.", "ports": []})
+    if "BitTorrent" in ((pv.get("chatter") or {}).get("apps") or {}):
+        flags.append({"key": "p2p", "level": "low", "label": "BitTorrent",
+                      "detail": "A BitTorrent client is running on this device (peer-to-peer file sharing).", "ports": []})
     flags.sort(key=lambda f: LEVEL_ORDER[f["level"]])
     return flags
 
@@ -580,6 +846,8 @@ def annotate(scan):
             if not h.get("hostname") and h["ident"].get("name"):
                 h["hostname"] = h["ident"]["name"]
         h["device"] = classify_host(h)
+        if h["device"].get("name"):      # your label's name
+            h["hostname"] = h["device"]["name"]
         h["flags"] = host_flags(h)
         h["rmm"] = rmm_check(h, h["device"]["type"])
         if h["rmm"]:
@@ -594,6 +862,11 @@ def annotate(scan):
         for p in h.get("ports", []):
             p["is_new"] = (h["ip"], p["port"], p["protocol"]) in opened
     scan["flag_counts"] = counts
+    tri = {}
+    for h in scan.get("hosts", []):
+        st = (h["device"].get("consensus") or {}).get("state", "none")
+        tri[st] = tri.get(st, 0) + 1
+    scan["triad"] = tri
     scan["rmm"] = rmm_counts if rmm_on else None
     scan["flag_total"] = sum(counts.values())
     return scan

@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+{% import "_triad.html" as triad with context %}<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -68,6 +68,7 @@
   .pres.heard { background: var(--cyan); box-shadow: 0 0 5px var(--cyan); }
   .heardtag { font-size: 0.62rem; letter-spacing: 0.12em; text-transform: uppercase; padding: 1px 5px 0; vertical-align: middle;
               color: var(--cyan); box-shadow: inset 0 0 0 1px var(--cyan); }
+{% include "_triad.css.html" %}
 </style>
 </head>
 <body>
@@ -129,7 +130,7 @@
           data-present="{{ 1 if d.present else 0 }}" data-missing="{{ 1 if d.rmm and d.rmm.status == 'missing' else 0 }}"
           data-flagged="{{ 1 if d.flags else 0 }}" data-heard="{{ 1 if d.heard and d.heard.recent else 0 }}" data-heardonly="{{ 1 if d.heard_only else 0 }}"
           data-text="{{ [d.mac, d.vendor, d.hostname, d.device.label] | select | join(' ') | lower }} {{ d.ips | join(' ') }} {{ d.hostnames | join(' ') | lower }}">
-        <td><span class="hexb t-{{ d.device.type }} c-{{ d.device.confidence }}" title="{{ d.device.label }} ({{ d.device.confidence }} confidence) -- {{ d.device.why }}">{{ d.device.code }}</span></td>
+        <td><span class="hexb t-{{ d.device.type }} c-{{ d.device.confidence }}" title="{{ d.device.label }} ({{ d.device.confidence }} confidence) -- {{ d.device.why }}">{{ d.device.code }}</span><div style="margin-top:3px;text-align:center">{{ triad.pips(d.device.consensus) }}</div></td>
         <td><a href="{{ url_for('device_page', mac=d.mac) }}"><span class="pres {{ 'on' if d.present else 'heard' if d.heard and d.heard.recent else '' }}" title="{{ 'In the latest scan of its network' if d.present else 'Heard on the network in the last hour' if d.heard and d.heard.recent else 'Not in the latest scan' }}"></span>{{ d.hostname or d.vendor or 'Unknown device' }}</a>{% if d.heard_only %} <span class="heardtag" title="Heard announcing itself on the network ({{ d.heard.kinds | join(', ') }}) but never in a scan">Heard</span>{% endif %}
           <span class="sm2"><span class="mac">{{ d.mac }}</span>{% if d.hostname and d.vendor %} &middot; {{ d.vendor }}{% endif %}{% if d.device.model %} &middot; {{ d.device.model }}{% endif %}{% if not d.hostname and not d.vendor %} &middot; {{ d.device.label }}{% endif %}</span></td>
         <td><span class="ipc">{{ d.ip or '–' }}</span>{% if d.ips | length > 1 %}<span class="sm2">{{ d.ips | length }} IPs seen</span>{% endif %}</td>

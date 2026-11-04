@@ -15,6 +15,13 @@ link it only hears the laptop at the other end):
   SSDP     UPnP NOTIFY announcements: server string, device type.
   NetBIOS  Windows name registrations / refreshes.
   LLDP     the switch announcing itself: switch name, port, VLAN.
+  CHATTER  background broadcasts apps make (Dropbox, Steam, Spotify, LLMNR,
+           WS-Discovery, SSDP searches with user agents, Windows browser
+           announcements, Ubiquiti / MikroTik discovery... see fpdb.py).
+  TCP      replies to Aliana's own scans (and connections to the Pi):
+           TTL, IP ID, window and options of the device's network stack,
+           and reply timing (wired vs wireless). Used by the FINGERPRINT
+           system in insights.py.
 
 Needs the CAP_NET_RAW capability (aliana.service grants it; run setup.sh
 after pulling). Without it, passive discovery shows as unavailable and
@@ -35,6 +42,7 @@ import time
 
 ETH_P_ALL = 0x0003
 SO_ATTACH_FILTER = 26
+SO_TIMESTAMPNS = 35
 PACKET_OUTGOING = 4
 FLUSH_SECONDS = 30
 MAX_DEVICES = 5000           # memory cap; oldest are dropped from memory first
@@ -57,28 +65,25 @@ _own_macs = set()
 #   ARP, LLDP, and UDP (not fragmented) to ports 67, 68, 137, 1900, 5353.
 
 def _bpf_program():
-    LDH_ABS, LDB_ABS, LDXB_MSH, LDH_IND = 0x28, 0x30, 0xB1, 0x48
+    LDH_ABS, LDB_ABS, LDXB_MSH, LDB_IND = 0x28, 0x30, 0xB1, 0x50
     JEQ, JSET, RET = 0x15, 0x45, 0x06
     ins = [
         (LDH_ABS, 0, 0, 12),           # 0  ethertype
-        (JEQ, 15, 0, 0x0806),          # 1  ARP -> accept
-        (JEQ, 14, 0, 0x88CC),          # 2  LLDP -> accept
-        (JEQ, 0, 14, 0x0800),          # 3  not IPv4 -> drop
-        (LDB_ABS, 0, 0, 23),           # 4  IP protocol
-        (JEQ, 0, 12, 17),              # 5  not UDP -> drop
-        (LDH_ABS, 0, 0, 20),           # 6  flags + fragment offset
-        (JSET, 10, 0, 0x1FFF),         # 7  fragment -> drop
-        (LDXB_MSH, 0, 0, 14),          # 8  X = IP header length
-        (LDH_IND, 0, 0, 16),           # 9  UDP destination port
-        (JEQ, 6, 0, 67),               # 10 DHCP server port
-        (JEQ, 5, 0, 68),               # 11 DHCP client port
-        (JEQ, 4, 0, 137),              # 12 NetBIOS name service
-        (JEQ, 3, 0, 1900),             # 13 SSDP
-        (JEQ, 2, 0, 5353),             # 14 mDNS
-        (RET, 0, 0, 0),                # 15 drop
-        (RET, 0, 0, 0),                # 16 (unused)
-        (RET, 0, 0, 0x0000FFFF),       # 17 accept
-        (RET, 0, 0, 0),                # 18 drop
+        (JEQ, 13, 0, 0x0806),          # 1  ARP -> accept
+        (JEQ, 12, 0, 0x88CC),          # 2  LLDP -> accept
+        (JEQ, 0, 10, 0x0800),          # 3  not IPv4 -> drop
+        (LDH_ABS, 0, 0, 20),           # 4  flags + fragment offset
+        (JSET, 8, 0, 0x1FFF),          # 5  fragment -> drop
+        (LDXB_MSH, 0, 0, 14),          # 6  X = IP header length
+        (LDB_ABS, 0, 0, 23),           # 7  IP protocol
+        (JEQ, 0, 2, 6),                # 8  TCP?
+        (LDB_IND, 0, 0, 27),           # 9  TCP flags
+        (JSET, 4, 3, 0x02),            # 10 SYN or SYN-ACK -> accept, other TCP -> drop
+        (JEQ, 0, 2, 17),               # 11 not UDP -> drop
+        (LDB_ABS, 0, 0, 0),            # 12 destination MAC, first byte
+        (JSET, 1, 0, 0x01),            # 13 broadcast / multicast UDP -> accept
+        (RET, 0, 0, 0),                # 14 drop
+        (RET, 0, 0, 0x0000FFFF),       # 15 accept
     ]
     return ins
 
@@ -229,7 +234,7 @@ def _parse_dhcp(payload, src_mac, iface):
         net["at"] = _now()
 
 
-def _parse_arp(frame, iface):
+def _parse_arp(frame, iface, ts=None):
     if len(frame) < 42:
         return
     htype, ptype, hlen, plen, op = struct.unpack(">HHBBH", frame[14:22])
@@ -245,6 +250,10 @@ def _parse_arp(frame, iface):
     a["at"] = _now()
     a["n"] = a.get("n", 0) + 1
     _set_ip(r, sip, "arp")
+    if op == 2 and ts:                       # reply: did we ask?
+        sent = _pending_arp.pop(sip, None)
+        if sent:
+            _rtt(r, (ts - sent) * 1000, iface)
 
 
 def _parse_mdns(payload, src_mac, src_ip, iface):
@@ -295,7 +304,21 @@ def _parse_ssdp(payload, src_mac, src_ip, iface):
     except Exception:
         return
     first = text.split("\r\n", 1)[0].upper()
-    if not first.startswith("NOTIFY") or _skip_mac(src_mac):
+    if _skip_mac(src_mac):
+        return
+    if first.startswith("M-SEARCH"):           # an app looking for devices: its user agent
+        ua = next((ln.split(":", 1)[1].strip() for ln in text.split("\r\n")
+                   if ln.lower().startswith("user-agent:")), None)
+        r = _rec(src_mac, iface)
+        ch = _chatter(r)
+        ch["apps"]["SSDP search"] = _now()
+        if ua:
+            ua = _clean(ua, 120)
+            ch["ua"] = ([ua] + [u for u in ch.get("ua", []) if u != ua])[:4]
+        _count("chatter")
+        _set_ip(r, src_ip, "ssdp")
+        return
+    if not first.startswith("NOTIFY"):
         return
     _count("ssdp")
     h = {}
@@ -314,6 +337,71 @@ def _parse_ssdp(payload, src_mac, src_ip, iface):
         s["device_type"] = _clean(nt, 120)
     s["at"] = _now()
     _set_ip(r, src_ip, "ssdp")
+
+
+def _chatter(r):
+    ch = r["info"].setdefault("chatter", {})
+    ch.setdefault("apps", {})
+    return ch
+
+
+def _tlvs(data, off, tlen=1, llen=2):
+    out = {}
+    while off + tlen + llen <= len(data):
+        t = int.from_bytes(data[off:off + tlen], "big")
+        n = int.from_bytes(data[off + tlen:off + tlen + llen], "big")
+        out.setdefault(t, data[off + tlen + llen:off + tlen + llen + n])
+        off += tlen + llen + n
+    return out
+
+
+def _parse_chatter(payload, src_mac, src_ip, sport, dport, iface):
+    """Background broadcasts from apps (fpdb.CHATTER_PORTS). True if kept."""
+    import fpdb
+    app = fpdb.CHATTER_PORTS.get(dport) or (fpdb.CHATTER_PORTS.get(sport) if sport in (10001, 5678) else None)
+    if _skip_mac(src_mac):
+        return False
+    r = _rec(src_mac, iface)
+    ch = _chatter(r)
+    _set_ip(r, src_ip, "chatter")
+    _count("chatter")
+    if not app:                       # unknown broadcast port: remember it as a trait
+        ports = ch.setdefault("ports", {})
+        if len(ports) < 12 or str(dport) in ports:
+            ports[str(dport)] = ports.get(str(dport), 0) + 1
+        return True
+    if app == "Ubiquiti discovery":
+        if len(payload) <= 4:
+            app = "UniFi discovery tool"           # someone asking, not a Ubiquiti device
+        else:
+            t = _tlvs(payload, 4)
+            ch["ubnt"] = {k: v for k, v in {"model": _clean(t.get(0x15) or t.get(0x14), 40),
+                                            "platform": _clean(t.get(0x0C), 40), "name": _clean(t.get(0x0B), 40),
+                                            "version": _clean(t.get(0x03), 60)}.items() if v}
+    elif app == "MikroTik discovery":
+        t = _tlvs(payload, 4, 2, 2)
+        ch["mndp"] = {k: v for k, v in {"name": _clean(t.get(5), 40), "version": _clean(t.get(7), 40),
+                                        "platform": _clean(t.get(8), 40), "model": _clean(t.get(12), 40)}.items() if v}
+    elif app == "WS-Discovery":
+        text = payload[:4096].decode("utf-8", "replace")
+        w = ch.setdefault("wsd", {})
+        if "/Hello" in text or "ProbeMatches" in text:
+            import re as _re
+            types = " ".join(_re.findall(r"Types>([^<]{1,300})<", text))
+            if types:
+                w["types"] = sorted(set(types.split()))[:12]
+        elif "/Probe" in text:
+            w["probes"] = True
+    elif app == "Windows browser":
+        i = payload.find(b"\\MAILSLOT\\BROWSE\x00")
+        if i >= 0:
+            b = payload[i + 17:]
+            if len(b) >= 32 and b[0] in (0x01, 0x0F):          # host / local master announcement
+                ch["browser"] = {"name": _clean(b[6:22].split(b"\x00")[0], 16),
+                                 "os": f"{b[22]}.{b[23]}", "type": int.from_bytes(b[24:28], "little"),
+                                 "comment": _clean(b[32:].split(b"\x00")[0], 60)}
+    ch["apps"][app] = _now()
+    return True
 
 
 def _nb_decode(enc):
@@ -383,26 +471,42 @@ def _parse_lldp(frame, src_mac, iface):
     _network.setdefault("lldp", {})[iface] = {k: v for k, v in info.items() if v is not None}
 
 
-def handle_frame(frame, iface, pkttype=0):
-    """Parses one Ethernet frame (also used by the tests)."""
-    if pkttype == PACKET_OUTGOING or len(frame) < 14:
+def handle_frame(frame, iface, pkttype=0, ts=None):
+    """Parses one Ethernet frame (also used by the tests). ts = kernel
+    receive time (seconds); our own outgoing frames are only used to time
+    the replies to them."""
+    if len(frame) < 14:
+        return
+    ts = ts or time.time()
+    etype = struct.unpack(">H", frame[12:14])[0]
+    src_mac = _mac(frame[6:12])
+    if pkttype == PACKET_OUTGOING:
+        with _lock:
+            try:
+                _outgoing(frame, etype, ts)
+            except Exception:
+                pass
         return
     _state["frames"] += 1
     _state["last_frame"] = _now()
-    etype = struct.unpack(">H", frame[12:14])[0]
-    src_mac = _mac(frame[6:12])
     with _lock:
         try:
             if etype == 0x0806:
-                _parse_arp(frame, iface)
+                _parse_arp(frame, iface, ts)
             elif etype == 0x88CC:
                 _parse_lldp(frame, src_mac, iface)
             elif etype == 0x0800 and len(frame) >= 34:
                 ihl = (frame[14] & 0x0F) * 4
-                if frame[23] != 17 or len(frame) < 14 + ihl + 8:
+                if len(frame) < 14 + ihl + 8:
                     return
                 src_ip = socket.inet_ntoa(frame[26:30])
                 u = 14 + ihl
+                if frame[23] == 6:
+                    _parse_tcp(frame, ihl, src_mac, src_ip, iface, ts)
+                    _state["parsed"] += 1
+                    return
+                if frame[23] != 17:
+                    return
                 sport, dport = struct.unpack(">HH", frame[u:u + 4])
                 payload = frame[u + 8:]
                 if dport in (67, 68):
@@ -414,12 +518,137 @@ def handle_frame(frame, iface, pkttype=0):
                 elif dport == 137:
                     _parse_netbios(payload, src_mac, src_ip, iface)
                 else:
-                    return
+                    if not _parse_chatter(payload, src_mac, src_ip, sport, dport, iface):
+                        return
             else:
                 return
             _state["parsed"] += 1
         except Exception:      # a malformed packet must never stop the listener
             pass
+
+
+# ---------------------------------------------------------------- fingerprint: stack traits + timing
+#
+# Replies to Aliana's own scans reach the Pi, so the listener can read how
+# each device's network stack answers (TTL, IP ID, window, options) and how
+# long it took (wired devices answer in well under a millisecond and
+# steadily; Wi-Fi is slower and jumpier). Nothing extra is sent.
+
+_pending_arp = {}      # target ip -> time we asked
+_pending_syn = {}      # (dst ip, dst port, src port) -> time our SYN left
+_local_nets = []       # [(ipaddress network, iface)]
+
+
+def _outgoing(frame, etype, ts):
+    if etype == 0x0806 and len(frame) >= 42:
+        if struct.unpack(">H", frame[20:22])[0] == 1:          # ARP request we sent
+            _pending_arp[socket.inet_ntoa(frame[38:42])] = ts
+            if len(_pending_arp) > 4096:
+                _prune(_pending_arp, ts)
+    elif etype == 0x0800 and len(frame) >= 34 and frame[23] == 6:
+        ihl = (frame[14] & 0x0F) * 4
+        t = 14 + ihl
+        if len(frame) < t + 14:
+            return
+        flags = frame[t + 13]
+        if flags & 0x12 == 0x02:                                # SYN (no ACK) we sent
+            sport, dport = struct.unpack(">HH", frame[t:t + 4])
+            _pending_syn[(socket.inet_ntoa(frame[30:34]), dport, sport)] = ts
+            if len(_pending_syn) > 20000:
+                _prune(_pending_syn, ts)
+
+
+def _prune(d, now):
+    for k in [k for k, v in d.items() if now - v > 3]:
+        d.pop(k, None)
+
+
+def _local(ip):
+    try:
+        import ipaddress
+        a = ipaddress.ip_address(ip)
+        return any(a in net for net, _ in _local_nets)
+    except ValueError:
+        return False
+
+
+def _rtt(r, ms, iface):
+    if ms is None or ms < 0 or ms > 1000:
+        return
+    t = r["info"].setdefault("rtt", {"samples": []})
+    t["samples"] = (t["samples"] + [round(ms, 3)])[-24:]
+    t["iface"] = iface
+    t["at"] = _now()
+
+
+def _tcp_options(opts):
+    out, mss, ws, ts = [], None, None, None
+    i = 0
+    while i < len(opts):
+        k = opts[i]
+        if k == 0:
+            out.append("E")
+            break
+        if k == 1:
+            out.append("N")
+            i += 1
+            continue
+        if i + 1 >= len(opts):
+            break
+        ln = opts[i + 1]
+        if ln < 2:
+            break
+        v = opts[i + 2:i + ln]
+        if k == 2 and len(v) == 2:
+            out.append("M")
+            mss = struct.unpack(">H", v)[0]
+        elif k == 3 and len(v) == 1:
+            out.append("W")
+            ws = v[0]
+        elif k == 4:
+            out.append("S")
+        elif k == 8 and len(v) == 8:
+            out.append("T")
+            ts = struct.unpack(">I", v[:4])[0]
+        else:
+            out.append(str(k))
+        i += ln
+    return ",".join(out), mss, ws, ts
+
+
+def _parse_tcp(frame, ihl, src_mac, src_ip, iface, ts):
+    t = 14 + ihl
+    if len(frame) < t + 20 or _skip_mac(src_mac) or not _local(src_ip):
+        return                       # off-subnet: the MAC is the router's, not the sender's
+    sport, dport = struct.unpack(">HH", frame[t:t + 4])
+    off = (frame[t + 12] >> 4) * 4
+    flags = frame[t + 13]
+    win = struct.unpack(">H", frame[t + 14:t + 16])[0]
+    opts, mss, ws, tsval = _tcp_options(frame[t + 20:t + off])
+    ttl = frame[22]
+    ipid = struct.unpack(">H", frame[18:20])[0]
+    df = bool(frame[20] & 0x40)
+    kind = "synack" if flags & 0x12 == 0x12 else "syn" if flags & 0x02 else None
+    if not kind:
+        return
+    _count("tcp")
+    r = _rec(src_mac, iface)
+    _set_ip(r, src_ip, "tcp")
+    st = r["info"].setdefault("stack", {})
+    st["ttl"] = ttl
+    st["ttl0"] = 64 if ttl <= 64 else 128 if ttl <= 128 else 255
+    st["df"] = df
+    st["ipids"] = (st.get("ipids", []) + [ipid])[-10:]
+    st["at"] = _now()
+    # A device's own SYN (it connected to the Pi) carries its full option
+    # set: the most telling signature. Keep it once seen.
+    if kind == "syn":
+        st["syn"] = {"win": win, "opts": opts, "mss": mss, "ws": ws, "ts": tsval is not None}
+    else:
+        st["synack"] = {"win": win, "opts": opts, "mss": mss, "ws": ws, "ts": tsval is not None}
+        sent = _pending_syn.pop((src_ip, sport, dport), None)
+        if sent:
+            _rtt(r, (ts - sent) * 1000, iface)
 
 
 # ---------------------------------------------------------------- storage
@@ -487,7 +716,29 @@ def forget_all():
 
 # ---------------------------------------------------------------- the listener
 
+def _kernel_time(anc):
+    for level, kind, data in anc or ():
+        if level == socket.SOL_SOCKET and kind == SO_TIMESTAMPNS:
+            if len(data) >= 16:
+                sec, ns = struct.unpack("qq", data[:16])
+            else:
+                sec, ns = struct.unpack("ii", data[:8])
+            return sec + ns / 1e9
+    return None
+
+
 def _load_own_macs():
+    # also: which subnets are directly attached (fingerprints only make sense there)
+    try:
+        import ipaddress
+        import scanner
+        nets = []
+        for i in scanner.list_interfaces():
+            if i.get("ipv4"):
+                nets.append((ipaddress.ip_interface(i["ipv4"]).network, i["name"]))
+        _local_nets[:] = nets
+    except Exception:
+        pass
     _own_macs.clear()
     try:
         for name in os.listdir("/sys/class/net"):
@@ -517,6 +768,10 @@ def _listen():
         keep = _attach_filter(sock)   # noqa: F841 (must stay referenced)
     except OSError as e:
         print("aliana passive: kernel filter unavailable, filtering in Python:", e, flush=True)
+    try:
+        sock.setsockopt(socket.SOL_SOCKET, SO_TIMESTAMPNS, 1)
+    except OSError:
+        pass
     sock.settimeout(1.0)
     _state.update(running=True, error=None, started=_now())
     _load_own_macs()
@@ -525,8 +780,8 @@ def _listen():
     try:
         while not _stop.is_set():
             try:
-                frame, addr = sock.recvfrom(4096)
-                handle_frame(frame, addr[0], addr[2])
+                frame, anc, _, addr = sock.recvmsg(4096, 64)
+                handle_frame(frame, addr[0], addr[2], _kernel_time(anc))
             except socket.timeout:
                 pass
             except OSError as e:
@@ -624,7 +879,8 @@ def merge_into(ident, mac):
     ident = ident if ident is not None else {}
     ident.setdefault("names", {})
     ident.setdefault("sources", [])
-    ident["passive"] = {k: info[k] for k in ("dhcp", "mdns", "ssdp", "netbios", "arp") if k in info}
+    ident["passive"] = {k: info[k] for k in ("dhcp", "mdns", "ssdp", "netbios", "arp", "stack", "rtt", "chatter")
+                        if k in info}
     ident["passive"]["first_heard"] = rec["first_seen"]
     ident["passive"]["last_heard"] = rec["last_seen"]
     d = info.get("dhcp") or {}

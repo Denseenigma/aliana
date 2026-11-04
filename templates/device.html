@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+{% import "_triad.html" as triad with context %}<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -7,6 +7,7 @@
 <title>Aliana &middot; {{ d.hostname or d.mac }}</title>
 <style>
 {% include "_theme.css.html" %}
+{% include "_triad.css.html" %}
   .who { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; margin-bottom: 14px; }
   .hexb {
     width: 58px; height: 50px; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0;
@@ -65,6 +66,10 @@
   .ev .ports .none { color: var(--muted); font-family: var(--sans); letter-spacing: 0.05em; }
   .ev .delta { margin-top: 4px; font-size: 0.78rem; letter-spacing: 0.06em; }
   .ev .delta .o { color: var(--red); } .ev .delta .c { color: var(--muted); }
+  .lab { display: grid; gap: 8px; }
+  .lab select, .lab input { width: 100%; }
+  .lab-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 0.8rem; }
+  .ev-sys.you { color: var(--cyan); border-color: var(--cyan); }
 </style>
 </head>
 <body>
@@ -84,6 +89,8 @@
   </h1>
   <nav class="nav"><a href="/">Dashboard</a><a href="/queue">Queue</a><a href="/devices" class="on">Devices</a><a href="/settings">Settings</a><a href="/wifi">Wi-Fi</a><a href="/logout" style="color:var(--red)" title="Sign out of Aliana (the Pi screen stays unlocked)">Lock</a></nav>
 </header>
+
+{{ triad.panel(d.device.consensus, d.device) }}
 
 <div class="grid" style="grid-template-columns:420px minmax(0,1fr)">
   <section class="panel">
@@ -125,10 +132,20 @@
       {% endif %}
     </dl>
     {% set idn = d.ident or {} %}
+    <div class="panel-head" style="margin-top:18px"><h2>Your label</h2>{% if label %}<span class="kv">set {{ label.at | when }}</span>{% endif %}</div>
+    <div class="lab">
+      <select id="lab-type"><option value="">Let the triad decide</option>
+        {% for k, name in types %}<option value="{{ k }}" {{ 'selected' if label and label.type == k }}>{{ name }}</option>{% endfor %}</select>
+      <input id="lab-name" placeholder="Name (optional)" maxlength="80" value="{{ label.name if label and label.name else '' }}">
+      <input id="lab-note" placeholder="Note, e.g. reception printer" maxlength="300" value="{{ label.note if label and label.note else '' }}">
+      <div class="lab-row"><button type="button" class="sm" id="lab-save">Save label</button>
+        {% if label %}<button type="button" class="ghost sm" id="lab-clear">Remove</button>{% endif %}
+        <span class="muted2" id="lab-msg">Your type overrules the vote; the triad's own answer stays visible.</span></div>
+    </div>
     <div class="panel-head" style="margin-top:18px"><h2>Identification</h2></div>
     {% if d.device.evidence %}
     <ul class="ev-list">
-      {% for e in d.device.evidence %}<li class="{{ 'win' if loop.first else '' }}"><b>{{ e.score }}</b><span>{{ e.why }} <span class="muted2">&rarr; {{ e.type }}</span></span></li>{% endfor %}
+      {% for e in d.device.evidence %}<li class="{{ 'win' if loop.first else '' }}"><b>{{ e.score }}</b><span>{{ e.why }} <span class="muted2">&rarr; {{ e.type }}</span>{% if e.system %}<i class="ev-sys {{ e.system }}">{{ e.system }}</i>{% endif %}</span></li>{% endfor %}
     </ul>
     {% else %}<p class="muted2">No clues yet &mdash; run a scan with identification on (Settings).</p>{% endif %}
     <div class="idgrid">
@@ -178,5 +195,21 @@
 </div>
 
 </div>
+<script>
+(function () {
+  var $ = function (id) { return document.getElementById(id); };
+  function send(body) {
+    return fetch("/api/device/{{ d.mac }}/label", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body) }).then(function (r) { return r.json(); });
+  }
+  $("lab-save").addEventListener("click", function () {
+    send({ type: $("lab-type").value, name: $("lab-name").value, note: $("lab-note").value }).then(function (d) {
+      if (d.ok) location.reload(); else $("lab-msg").textContent = d.error || "Couldn't save.";
+    });
+  });
+  var c = $("lab-clear");
+  if (c) c.addEventListener("click", function () { send({}).then(function () { location.reload(); }); });
+})();
+</script>
 </body>
 </html>

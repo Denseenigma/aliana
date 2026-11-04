@@ -24,6 +24,7 @@ import qr
 import auth
 import vault
 import passive
+import labels
 
 PORT = 8080
 
@@ -262,6 +263,7 @@ def _erase_everything_sensitive():
     passive.forget_all()     # first, so the listener can't write it back
     auth.erase_sensitive(scanner.DB_PATH, vault.key_path())
     rmm.forget_runtime_state()
+    labels.forget_all()
 
 
 @app.route("/api/auth/status")
@@ -678,7 +680,22 @@ def device_page(mac):
     if not h:
         return redirect(url_for("devices_page"))
     return render_template("device.html", d=_device_view(h["device"]), timeline=h["timeline"],
-                           profiles=scanner.PROFILES, status=scanner.get_status())
+                           profiles=scanner.PROFILES, status=scanner.get_status(),
+                           label=labels.get(h["device"]["mac"]),
+                           types=[(k, v[1]) for k, v in insights.TYPES.items() if k not in ("unknown", "unix", "embedded")])
+
+
+@app.route("/api/device/<mac>/label", methods=["POST"])
+def api_device_label(mac):
+    """Your own word on a device: {type, name, note}; all empty removes it."""
+    mac = history.norm_mac(mac)
+    if not mac:
+        return jsonify({"ok": False, "error": "Not a MAC address."}), 400
+    data = request.get_json(silent=True) or {}
+    t = (data.get("type") or "").strip()
+    if t and t not in insights.TYPES:
+        return jsonify({"ok": False, "error": "Unknown device type."}), 400
+    return jsonify({"ok": True, "label": labels.set_label(mac, t, data.get("name"), data.get("note"))})
 
 
 @app.route("/api/devices")
@@ -1079,6 +1096,7 @@ if __name__ == "__main__":
     rmm.init_db()
     scanner.on_job_done.append(rmm.maybe_sync_after)
     passive.init_db()
+    labels.init_db()
     if passive.enabled():
         passive.start()   # listens only; needs CAP_NET_RAW (setup.sh)
     # The queue worker runs every scan, one at a time; the auto-scan loop

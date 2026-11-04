@@ -1,0 +1,102 @@
+{#- The triad: three systems vote on what a device is (insights._decide).
+    pips(c)  -- three small hexes for cards / tables
+    panel(c, device) -- the full decision board for the device page        -#}
+
+{%- set TRIAD_STATE = {
+  'unanimous': ('UNANIMOUS', '3 of 3 systems agree'),
+  'confirmed': ('CONFIRMED', '2 of 3 systems agree'),
+  'single': ('SINGLE SOURCE', 'only one system has an answer'),
+  'disputed': ('DISPUTED', 'the systems disagree'),
+  'none': ('NO DATA', 'no system has an answer yet'),
+} -%}
+
+{% macro pips(c) -%}
+{%- if c and c.votes -%}
+<span class="tri-pips st-{{ c.state }}{{ ' ov' if c.override }}" title="{% if c.override %}SET BY YOU: {{ c.override.label }}&#10;{% endif %}{{ TRIAD_STATE[c.state][0] }} &middot; {{ TRIAD_STATE[c.state][1] }}{% for v in c.votes %}&#10;{{ v.name }}: {% if v.abstain %}no answer{% else %}{{ v.label }} ({{ v.score }}){{ ' ✓' if v.agrees else ' ✗' }}{% endif %}{% endfor %}">
+  {%- for v in c.votes -%}<i class="{{ 'ag' if v.agrees else 'ds' if v.dissents else 'ab' }}"></i>{%- endfor -%}
+</span>
+{%- endif -%}
+{%- endmacro %}
+
+{% macro unit(v, c, pos) -%}
+<div class="tri-unit u-{{ pos }} {{ 'ag' if v.agrees else 'ds' if v.dissents else 'ab' }}" data-tri="{{ pos }}">
+  <div class="tri-name"><span class="n">{{ v.num }}</span>{{ v.name }}<span class="lamp"></span></div>
+  {%- if v.abstain %}
+  <div class="tri-vote"><span class="hexb t-unknown">&ndash;</span><span class="tri-l">No answer</span></div>
+  <div class="tri-why">{{ v.why or 'nothing to go on' }}{% if v.why %} <span class="muted2">(too weak: {{ v.score }})</span>{% endif %}</div>
+  {%- else %}
+  <div class="tri-vote"><span class="hexb t-{{ v.type }}">{{ v.code }}</span><span class="tri-l">{{ v.label }}</span></div>
+  <div class="tri-bar"><span style="width:{{ v.score }}%"></span><b>{{ v.score }}</b></div>
+  <div class="tri-why">{{ v.why }}{% if v.clues > 1 %} <span class="muted2">+{{ v.clues - 1 }} more</span>{% endif %}</div>
+  {%- endif %}
+  {%- if v.system == 'fingerprint' and c.facts %}
+  <ul class="tri-facts">{% for f in c.facts[:6] %}<li>{{ f }}</li>{% endfor %}</ul>
+  {%- endif %}
+  <div class="tri-verdict">{{ 'AGREE' if v.agrees else 'DISSENT' if v.dissents else 'NO DATA' }}</div>
+</div>
+{%- endmacro %}
+
+{% macro panel(c, device) -%}
+{%- set st = TRIAD_STATE[c.state if c else 'none'] -%}
+{%- set ov = c.override if c else None -%}
+{%- set votes = c.votes if c else [] -%}
+<section class="panel tri-panel st-{{ 'override' if ov else (c.state if c else 'none') }}">
+  <div class="panel-head"><h2>Triad decision</h2>
+    <span class="tri-stamp">{% if ov %}SET BY YOU{% else %}{{ st[0] }}{% if c and c.voting %} <b>{{ c.agree }}/3</b>{% endif %}{% endif %}</span></div>
+  {%- if c and c.mismatch %}<div class="tri-warn">&#9888; {{ c.mismatch }}</div>{% endif %}
+  <div class="tri-tri">
+    <svg class="tri-wires" aria-hidden="true"></svg>
+    {%- if votes | length == 3 %}
+    {{ unit(votes[0], c, 'top') }}
+    {{ unit(votes[1], c, 'left') }}
+    {{ unit(votes[2], c, 'right') }}
+    {%- endif %}
+    <div class="tri-core" data-tri="core">
+      <div class="tri-core-in">
+        <span class="hexb t-{{ device.type }}">{{ device.code }}</span>
+        <div class="tri-rl">{{ device.label }}</div>
+        <div class="tri-cs">{% if ov %}SET BY YOU{% else %}{{ st[0] }}{% endif %}</div>
+        <div class="tri-meter">{% for v in votes %}<i class="{{ 'ag' if v.agrees else 'ds' if v.dissents else 'ab' }}"></i>{% endfor %}</div>
+      </div>
+    </div>
+  </div>
+  <div class="tri-rs">
+    {%- if ov %}Your label{% if ov.note %} &middot; {{ ov.note }}{% endif %} &middot; the triad said
+      {% if c.type %}{{ c.label }} ({{ st[0] | lower }}){{ ' — agrees' if ov.agrees else ' — differs' }}{% else %}nothing{% endif %}
+    {%- else %}{{ st[1] | capitalize }}{% if device.confidence != 'none' %} &middot; {{ device.confidence }} confidence{% endif %}{% endif %}</div>
+</section>
+<script>
+(function () {
+  // Wires from each unit to the core (redrawn on resize)
+  var box = document.currentScript.previousElementSibling.querySelector(".tri-tri");
+  if (!box) return;
+  function c(el, side) {
+    var r = el.getBoundingClientRect(), b = box.getBoundingClientRect();
+    var x = r.left - b.left, y = r.top - b.top;
+    if (side === "bottom") return [x + r.width / 2, y + r.height];
+    if (side === "right") return [x + r.width, y + r.height / 2];
+    if (side === "left") return [x, y + r.height / 2];
+    if (side === "top") return [x + r.width / 2, y];
+    return [x + r.width / 2, y + r.height / 2];
+  }
+  function draw() {
+    var svg = box.querySelector(".tri-wires"), core = box.querySelector("[data-tri=core]");
+    if (getComputedStyle(svg).display === "none") return;
+    var b = box.getBoundingClientRect();
+    svg.setAttribute("viewBox", "0 0 " + b.width + " " + b.height);
+    var cc = c(core), html = "";
+    [["top", "bottom"], ["left", "right"], ["right", "left"]].forEach(function (p) {
+      var u = box.querySelector("[data-tri=" + p[0] + "]");
+      if (!u) return;
+      var a = c(u, p[1]), k = u.classList.contains("ag") ? "ag" : u.classList.contains("ds") ? "ds" : "ab";
+      var mid = p[0] === "top" ? [a[0], a[1] + (cc[1] - a[1]) * 0.5] : [a[0] + (cc[0] - a[0]) * 0.5, a[1]];
+      html += '<path class="' + k + '" d="M' + a[0] + " " + a[1] + " L" + mid[0] + " " + mid[1] + " L" + cc[0] + " " + cc[1] + '"/>';
+    });
+    svg.innerHTML = html;
+  }
+  draw();
+  window.addEventListener("resize", draw);
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(draw);
+})();
+</script>
+{%- endmacro %}
