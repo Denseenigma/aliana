@@ -677,6 +677,8 @@
   .kl-keys button { font-family: var(--title); font-size: 26px; padding: 0; min-height: 0; }
   .kl-keys button.fn { font-family: var(--cond); font-size: 13px; letter-spacing: 0.1em; }
   #clock.lockable { cursor: pointer; gap: 5px; }
+  #clock.holding { color: var(--red); }
+  #clock.holding::before { background: var(--red) !important; }
   #clock.lockable::before { content: ""; width: 10px; height: 12px; background: var(--orange);
     -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 12'%3E%3Cpath d='M2 5V3.5a3 3 0 0 1 6 0V5h1v7H1V5zM3.5 5h3V3.5a1.5 1.5 0 0 0-3 0z'/%3E%3C/svg%3E") center / contain no-repeat;
             mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 12'%3E%3Cpath d='M2 5V3.5a3 3 0 0 1 6 0V5h1v7H1V5zM3.5 5h3V3.5a1.5 1.5 0 0 0-3 0z'/%3E%3C/svg%3E") center / contain no-repeat; }
@@ -1167,14 +1169,23 @@
     }
   }, 1000);
   window.addEventListener("aliana-locked", function () { poll(); });
-  $("clock").addEventListener("click", function () { if (lockCfg.enabled && !MIRROR) lockNow(); });
+  // Lock = press and hold the clock (a stray tap must not lock the unit)
+  var holdT = null;
+  function holdStart() {
+    if (!lockCfg.enabled || MIRROR || locked) return;
+    $("clock").classList.add("holding");
+    holdT = setTimeout(function () { $("clock").classList.remove("holding"); lockNow(); }, 1000);
+  }
+  function holdEnd() { clearTimeout(holdT); $("clock").classList.remove("holding"); }
+  $("clock").addEventListener("pointerdown", holdStart);
+  ["pointerup", "pointerleave", "pointercancel"].forEach(function (ev) { $("clock").addEventListener(ev, holdEnd); });
 
   function apply(data) {
     if (data.pairing !== undefined) renderPairing(data.pairing);
     if (data.lock) {
       lockCfg = data.lock;
       $("clock").classList.toggle("lockable", !!(lockCfg.enabled && !MIRROR));
-      $("clock").title = lockCfg.enabled && !MIRROR ? "Tap to lock" : "";
+      $("clock").title = lockCfg.enabled && !MIRROR ? "Hold to lock" : "";
     }
     if (data.locked) {
       if (!booted) { booted = true; finishBoot(); }

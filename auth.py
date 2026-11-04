@@ -41,7 +41,11 @@ ISSUER = "Aliana"
 DIGITS = 6
 PERIOD = 30
 RECOVERY_COUNT = 10
-SESSION_HOURS = 12
+# Long on purpose: sessions already end at every reboot (session.key is tied
+# to the boot) and with the unit lock / idle timeout. A short lifetime breaks
+# when the Pi's clock jumps forward at boot (no clock battery: NTP can move
+# it by days), making a fresh sign-in look expired.
+SESSION_HOURS = 24 * 30
 PAIRING_TTL = 15 * 60          # an unused pairing code is replaced after this
 PAIRING_TRIES = 5              # wrong pairing codes before a new one is drawn
 

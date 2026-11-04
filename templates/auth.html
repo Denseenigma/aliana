@@ -114,6 +114,7 @@
     <span class="spacer"></span>
     <button type="button" class="linkbtn" id="toggle-rc">Use a recovery code</button>
   </div>
+  <div class="msg show" id="clock-warn" hidden></div>
   <p class="hint" id="pi-hint">Or unlock it on the Pi's screen &mdash; this page will follow.</p>
   <div class="row" style="margin-top:18px">
     <span class="hint" style="margin:0">Lost your phone <i>and</i> your recovery codes?</span>
@@ -257,6 +258,11 @@
     setInterval(function () {
       fetch("/api/auth/state", { cache: "no-store" }).then(function (r) { return r.json(); }).then(function (d) {
         if (d.signed_in) { unlocked(); location.href = NEXT; }
+        var skew = Math.round(d.time - Date.now() / 1000), w = $("clock-warn");
+        w.hidden = Math.abs(skew) < 90;
+        if (!w.hidden) w.textContent = "The Pi's clock is " + (Math.abs(skew) >= 3600 ? Math.round(Math.abs(skew) / 3600) + " h" :
+          Math.round(Math.abs(skew) / 60) + " min") + (skew < 0 ? " behind" : " ahead") + " of this computer, so authenticator codes won't match. " +
+          "It sets itself from the internet: connect the Pi to a network with internet access, or check this computer's clock.";
         $("pi-hint").textContent = d.trusted ? "Or unlock it on the Pi's screen \u2014 this page will follow."
                                              : "This browser hasn't signed in since the Pi started: enter a code here.";
       }).catch(function () {});

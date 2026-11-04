@@ -397,7 +397,7 @@
   <section class="panel">
     <div class="panel-head"><h2>Access control</h2><span class="kv" id="auth-kv"></span></div>
     <p class="desc">Browsers unlock Aliana with the <b>6-digit code from your authenticator app</b> (or a single-use
-      <b>recovery code</b>) and stay signed in for 12 hours. The Pi's own screen never asks.
+      <b>recovery code</b>) and stay signed in until the unit locks (Lock, idle) or the Pi reboots.
       If both are lost, <b>Erase &amp; reset</b> on the sign-in page wipes the RMM credentials and scan history and lets
       you set up again; it needs a code shown on the Pi's screen.</p>
     <div class="readout" id="auth-readout"></div>
@@ -409,7 +409,7 @@
     <div class="kv" style="margin:10px 0 6px">Lock everything after idle</div>
     <div class="opts" id="kli-opts"></div>
     <p class="hint">One lock for the whole unit: unlocking in a browser or on the Pi's keypad unlocks both, and <b>Lock</b>,
-      the padlock by the Pi's clock, or the idle time locks everything. Browsers that have entered a code since the Pi
+      holding the padlock by the Pi's clock for a second, or the idle time locks everything. Browsers that have entered a code since the Pi
       started come back in whenever it's unlocked; new browsers always need a code. Setup and reset codes still show on
       the locked Pi screen.</p>
     <div class="add" style="margin-top:10px">

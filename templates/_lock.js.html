@@ -22,6 +22,14 @@
     });
   };
   window.fetch._aliana = true;
+  // Lock links lock with a POST (a GET could be fired by link prefetching)
+  document.addEventListener("click", function (e) {
+    var a = e.target.closest && e.target.closest('a[href="/logout"]');
+    if (!a) return;
+    e.preventDefault();
+    f("/api/auth/lock", { method: "POST" }).then(function () { location.href = "/login"; },
+                                                function () { location.href = "/login"; });
+  });
   // Real use (not auto-refresh) keeps the whole unit from idling into its lock.
   if (location.pathname.indexOf("/kiosk") !== 0) {
     var last = 0;

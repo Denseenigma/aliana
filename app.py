@@ -122,7 +122,9 @@ def kiosk_idle():
 # "trusted": they're let back in whenever the unit is unlocked, from wherever.
 # A new browser always needs a code (which also unlocks the unit).
 
-_unit = {"last": time.time()}
+# monotonic: the Pi has no clock battery, so wall-clock time jumps (often by
+# hours) when NTP syncs after boot -- that must not count as "idle"
+_unit = {"last": time.monotonic()}
 _unit_lock = threading.Lock()
 
 
@@ -132,17 +134,21 @@ def _unit_unlocked_raw():
 
 def unit_unlock():
     with _unit_lock:
+        if not _unit_unlocked_raw():
+            print(f"aliana auth: unlocked ({'Pi keypad' if _is_local() else request.remote_addr})", flush=True)
         scanner._set_setting("unit_unlocked_boot", auth._boot_id())
-        _unit["last"] = time.time()
+        _unit["last"] = time.monotonic()
 
 
-def unit_lock():
+def unit_lock(reason):
     with _unit_lock:
+        if scanner._get_setting("unit_unlocked_boot", ""):
+            print(f"aliana auth: locked ({reason})", flush=True)
         scanner._set_setting("unit_unlocked_boot", "")
 
 
 def unit_touch():
-    _unit["last"] = time.time()
+    _unit["last"] = time.monotonic()
 
 
 def unit_unlocked():
@@ -152,9 +158,8 @@ def unit_unlocked():
         return True
     if not _unit_unlocked_raw():
         return False
-    if kiosk_lock_enabled() and time.time() - _unit["last"] > kiosk_idle():
-        unit_lock()
-        print("aliana auth: locked after", kiosk_idle(), "s idle", flush=True)
+    if kiosk_lock_enabled() and time.monotonic() - _unit["last"] > kiosk_idle():
+        unit_lock(f"idle for {kiosk_idle()} s")
         return False
     return True
 
@@ -236,8 +241,11 @@ def login_page():
 def logout():
     """Lock in the header: locks the whole unit (Pi screen too). This browser
     stays trusted, so unlocking at the Pi lets it straight back in."""
-    if _trusted() or (_is_local() and kiosk_lock_enabled()):
-        unit_lock()
+    # Browsers may fetch links ahead of a click (prefetch / prerender): those
+    # must never lock anything. Pages lock with POST /api/auth/lock instead.
+    ahead = (request.headers.get("Sec-Purpose") or request.headers.get("Purpose") or "").lower()
+    if not ahead and (_trusted() or (_is_local() and kiosk_lock_enabled())):
+        unit_lock(f"Lock link, {request.remote_addr}")
     return redirect(url_for("login_page") if auth.is_configured() else url_for("setup_page"))
 
 
@@ -343,7 +351,7 @@ def api_auth_reset():
 def api_auth_lock():
     """The Pi screen's padlock (or a trusted browser): lock the whole unit."""
     if _trusted() or _is_local():
-        unit_lock()
+        unit_lock("Pi screen padlock" if _is_local() else f"Lock, {request.remote_addr}")
     return jsonify({"ok": True})
 
 
@@ -351,7 +359,7 @@ def api_auth_lock():
 def api_auth_state():
     """For the sign-in page: unlocked elsewhere (e.g. at the Pi)? -> back in."""
     return jsonify({"ok": True, "configured": auth.is_configured(), "unlocked": unit_unlocked(),
-                    "trusted": _trusted(), "signed_in": _signed_in()})
+                    "trusted": _trusted(), "signed_in": _signed_in(), "time": time.time()})
 
 
 @app.route("/api/auth/activity", methods=["POST"])
