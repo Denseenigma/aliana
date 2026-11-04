@@ -18,7 +18,7 @@ The Pi's own screen (requests from 127.0.0.1) never needs to sign in.
 
 Stored in ~/.config/aliana/ (owner-only, outside the repo):
   auth.json     -- TOTP secret, recovery-code hashes, session epoch
-  session.key   -- signs the browser session cookie
+  session.key   -- signs the browser session cookie (new on every boot)
 Override the folder with ALIANA_CONFIG_DIR.
 
 Locked out and no access to the Pi screen? Over SSH:
@@ -90,18 +90,29 @@ def is_configured():
     return _load() is not None
 
 
+def _boot_id():
+    try:
+        with open("/proc/sys/kernel/random/boot_id") as f:
+            return f.read().strip()
+    except OSError:
+        return "unknown"
+
+
 def session_key():
-    """Random key that signs Flask's session cookie (created on first use)."""
+    """Random key that signs Flask's session cookie. It's tied to the Pi's
+    current boot, so a reboot signs every browser out (restarting the
+    service alone doesn't)."""
     path = _path("session.key")
+    boot = _boot_id()
     try:
         with open(path, "rb") as f:
-            key = f.read().strip()
-            if len(key) >= 32:
+            saved_boot, _, key = f.read().strip().partition(b" ")
+            if saved_boot.decode() == boot and len(key) >= 32:
                 return key
-    except OSError:
+    except (OSError, UnicodeDecodeError):
         pass
     key = secrets.token_hex(32).encode()
-    _write_private(path, key + b"\n")
+    _write_private(path, boot.encode() + b" " + key + b"\n")
     return key
 
 
