@@ -1180,7 +1180,9 @@
   $("clock").addEventListener("pointerdown", holdStart);
   ["pointerup", "pointerleave", "pointercancel"].forEach(function (ev) { $("clock").addEventListener(ev, holdEnd); });
 
+  var BUILD = {{ build | tojson }};
   function apply(data) {
+    if (data.build && BUILD && data.build !== BUILD) { location.reload(); return; }   // Aliana was updated
     if (data.pairing !== undefined) renderPairing(data.pairing);
     if (data.lock) {
       lockCfg = data.lock;

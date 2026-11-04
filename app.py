@@ -12,6 +12,7 @@ import socket
 import subprocess
 import threading
 import time
+import uuid
 from flask import Flask, render_template, jsonify, redirect, url_for, request, Response, session
 
 import scanner
@@ -27,6 +28,10 @@ import passive
 import labels
 
 PORT = 8080
+
+# Changes every time the service starts: the Pi screen reloads itself when it
+# sees a new one, so it never keeps running an old page after an update.
+BUILD = uuid.uuid4().hex[:12]
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 64 * 1024 * 1024   # history imports
@@ -549,7 +554,7 @@ def set_interface():
 @app.route("/kiosk")
 def kiosk():
     """Condensed 480x320 control screen for the Pi's onboard display."""
-    return render_template("kiosk.html")
+    return render_template("kiosk.html", build=BUILD)
 
 
 _nmap_version = None
@@ -616,13 +621,14 @@ def api_kiosk():
     lock = {"enabled": kiosk_lock_enabled() and auth.is_configured(), "idle": kiosk_idle()}
     if _is_local() and _kiosk_locked():
         # Locked: only what the lock screen shows -- no scan data
-        state = {"locked": True, "lock": lock, "hostname": socket.gethostname(),
+        state = {"locked": True, "lock": lock, "build": BUILD, "hostname": socket.gethostname(),
                  "interface": scanner.get_current_interface(), "addresses": _pairing_urls()}
         state["pairing"] = auth.pairing_display()
         return jsonify(state)
     state = _kiosk_state()
     state["locked"] = False
     state["lock"] = lock
+    state["build"] = BUILD
     # The pairing code only ever goes to the Pi's own screen
     pairing = auth.pairing_display() if _is_local() else None
     if pairing and pairing["reason"] == "setup":
