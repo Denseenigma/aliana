@@ -418,7 +418,14 @@ authenticator app** on your phone (Microsoft / Google Authenticator, Authy,
 **Pi screen lock** (Settings > Access control, on by default): the touchscreen
 shows a LOCKED screen with a keypad after every boot and after sitting idle
 (2 min - 1 h, default 5 min); enter the authenticator code to unlock, or tap
-the padlock by the clock to lock it. While locked it shows no scan data, but
+the padlock by the clock to lock it.
+
+**One lock for the whole unit:** unlocking in a browser also unlocks the Pi
+screen, and unlocking on the Pi's keypad lets back in any browser that has
+entered a code since the Pi started (its sign-in page follows along). Lock in
+a browser, the padlock on the Pi, or the idle time locks everything. A
+browser that hasn't signed in since boot always needs its own code. Real use
+of a page or the touchscreen counts as activity; auto-refresh doesn't. While locked it shows no scan data, but
 setup and reset codes still appear on it. No phone? Sign in from a browser
 with a recovery code and turn the screen lock off.
 

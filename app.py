@@ -90,7 +90,7 @@ def ago(iso):
 _PUBLIC_ENDPOINTS = {
     "static", "login_page", "setup_page", "reset_page", "logout",
     "api_auth_login", "api_auth_pair", "api_auth_enroll", "api_auth_qr",
-    "api_auth_reset_request", "api_auth_reset", "api_auth_lock",
+    "api_auth_reset_request", "api_auth_reset", "api_auth_lock", "api_auth_state",
 }
 
 
@@ -114,26 +114,77 @@ def kiosk_idle():
     return v if v in KIOSK_IDLE_CHOICES else 300
 
 
+# ---- one lock for the whole unit
+#
+# Unlocking anywhere (a browser or the Pi's keypad) unlocks the unit; locking
+# anywhere (Lock in a browser, the padlock on the Pi screen, or idle) locks
+# it everywhere. Browsers that have entered a code since the Pi booted are
+# "trusted": they're let back in whenever the unit is unlocked, from wherever.
+# A new browser always needs a code (which also unlocks the unit).
+
+_unit = {"last": time.time()}
+_unit_lock = threading.Lock()
+
+
+def _unit_unlocked_raw():
+    return scanner._get_setting("unit_unlocked_boot", "") == auth._boot_id()
+
+
+def unit_unlock():
+    with _unit_lock:
+        scanner._set_setting("unit_unlocked_boot", auth._boot_id())
+        _unit["last"] = time.time()
+
+
+def unit_lock():
+    with _unit_lock:
+        scanner._set_setting("unit_unlocked_boot", "")
+
+
+def unit_touch():
+    _unit["last"] = time.time()
+
+
+def unit_unlocked():
+    """No authenticator yet: nothing to lock. Otherwise unlocked until
+    someone locks it, it reboots, or it sits idle (with the screen lock on)."""
+    if not auth.is_configured():
+        return True
+    if not _unit_unlocked_raw():
+        return False
+    if kiosk_lock_enabled() and time.time() - _unit["last"] > kiosk_idle():
+        unit_lock()
+        print("aliana auth: locked after", kiosk_idle(), "s idle", flush=True)
+        return False
+    return True
+
+
 def _kiosk_locked():
     """The Pi screen is locked: lock on, an authenticator exists (otherwise
-    there'd be no way to unlock), and the screen's browser isn't signed in."""
-    return kiosk_lock_enabled() and auth.is_configured() and not _signed_in()
+    there'd be no way to unlock), and the unit is locked."""
+    return kiosk_lock_enabled() and auth.is_configured() and not unit_unlocked()
 
 
 # What a locked Pi screen may still reach: its page, the lock screen's state
 # (clock, pairing / reset codes) and cancelling a reset request.
-_LOCKED_SCREEN_ENDPOINTS = {"kiosk", "api_kiosk", "api_auth_reset_cancel"}
+_LOCKED_SCREEN_ENDPOINTS = {"kiosk", "api_kiosk", "api_auth_reset_cancel", "api_auth_activity"}
+
+
+def _trusted():
+    """This browser entered a code since boot (and the authenticator hasn't changed)."""
+    ep = session.get("ep")
+    return bool(ep) and ep == auth.epoch()
 
 
 def _signed_in():
-    ep = session.get("ep")
-    return bool(ep) and ep == auth.epoch()
+    return _trusted() and unit_unlocked()
 
 
 def _sign_in():
     session.clear()
     session.permanent = True
     session["ep"] = auth.epoch()
+    unit_unlock()
 
 
 def _safe_next(target):
@@ -143,7 +194,13 @@ def _safe_next(target):
 
 @app.before_request
 def _require_sign_in():
-    if request.endpoint in _PUBLIC_ENDPOINTS or _signed_in():
+    if request.endpoint in _PUBLIC_ENDPOINTS:
+        return None
+    if _signed_in():
+        # actions keep the unit awake; page refreshes and polling don't
+        # (pages report real use through /api/auth/activity)
+        if request.method != "GET":
+            unit_touch()
         return None
     if _is_local() and (not _kiosk_locked() or request.endpoint in _LOCKED_SCREEN_ENDPOINTS):
         return None
@@ -177,7 +234,10 @@ def login_page():
 
 @app.route("/logout")
 def logout():
-    session.clear()
+    """Lock in the header: locks the whole unit (Pi screen too). This browser
+    stays trusted, so unlocking at the Pi lets it straight back in."""
+    if _trusted() or (_is_local() and kiosk_lock_enabled()):
+        unit_lock()
     return redirect(url_for("login_page") if auth.is_configured() else url_for("setup_page"))
 
 
@@ -281,8 +341,24 @@ def api_auth_reset():
 
 @app.route("/api/auth/lock", methods=["POST"])
 def api_auth_lock():
-    """Sign this browser out (the Pi screen's lock button / idle timeout)."""
-    session.clear()
+    """The Pi screen's padlock (or a trusted browser): lock the whole unit."""
+    if _trusted() or _is_local():
+        unit_lock()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/auth/state")
+def api_auth_state():
+    """For the sign-in page: unlocked elsewhere (e.g. at the Pi)? -> back in."""
+    return jsonify({"ok": True, "configured": auth.is_configured(), "unlocked": unit_unlocked(),
+                    "trusted": _trusted(), "signed_in": _signed_in()})
+
+
+@app.route("/api/auth/activity", methods=["POST"])
+def api_auth_activity():
+    """Someone is using a page or the Pi screen: keeps the unit awake (only if unlocked)."""
+    if (_is_local() or _trusted()) and unit_unlocked():
+        unit_touch()
     return jsonify({"ok": True})
 
 

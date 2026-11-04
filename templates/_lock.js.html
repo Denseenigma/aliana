@@ -22,5 +22,17 @@
     });
   };
   window.fetch._aliana = true;
+  // Real use (not auto-refresh) keeps the whole unit from idling into its lock.
+  if (location.pathname.indexOf("/kiosk") !== 0) {
+    var last = 0;
+    ["pointerdown", "keydown", "wheel", "mousemove", "touchstart"].forEach(function (ev) {
+      document.addEventListener(ev, function () {
+        var now = Date.now();
+        if (now - last < 20000) return;
+        last = now;
+        f("/api/auth/activity", { method: "POST" }).catch(function () {});
+      }, { passive: true });
+    });
+  }
 })();
 </script>

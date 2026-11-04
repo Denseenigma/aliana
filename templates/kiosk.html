@@ -1149,11 +1149,18 @@
     if (MIRROR || !lockCfg.enabled) return;
     fetch("/api/auth/lock", { method: "POST" }).then(poll, poll);
   }
+  var lastSent = 0;
   ["pointerdown", "touchstart", "keydown"].forEach(function (ev) {
-    document.addEventListener(ev, function () { lastTouch = Date.now(); }, { passive: true });
+    document.addEventListener(ev, function () {
+      lastTouch = Date.now();
+      // tell Aliana the unit is in use (the idle lock is shared with browsers)
+      if (!MIRROR && !locked && lockCfg.enabled && lastTouch - lastSent > 20000) {
+        lastSent = lastTouch;
+        fetch("/api/auth/activity", { method: "POST" }).catch(function () {});
+      }
+    }, { passive: true });
   });
-  setInterval(function () {   // idle lock
-    if (!MIRROR && lockCfg.enabled && !locked && Date.now() - lastTouch > lockCfg.idle * 1000) lockNow();
+  setInterval(function () {
     if (locked) {
       var d = new Date();
       $("kl-clock").textContent = String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0");

@@ -114,6 +114,7 @@
     <span class="spacer"></span>
     <button type="button" class="linkbtn" id="toggle-rc">Use a recovery code</button>
   </div>
+  <p class="hint" id="pi-hint">Or unlock it on the Pi's screen &mdash; this page will follow.</p>
   <div class="row" style="margin-top:18px">
     <span class="hint" style="margin:0">Lost your phone <i>and</i> your recovery codes?</span>
     <a class="linkbtn red" href="/reset">Erase &amp; reset</a>
@@ -251,6 +252,15 @@
     }
     $("login-go").addEventListener("click", go);
     onEnter($("totp"), go); onEnter($("rc"), go); autoSix($("totp"), go);
+    // Unlocked somewhere else (e.g. on the Pi's keypad)? A browser that has
+    // signed in before goes straight back in.
+    setInterval(function () {
+      fetch("/api/auth/state", { cache: "no-store" }).then(function (r) { return r.json(); }).then(function (d) {
+        if (d.signed_in) { unlocked(); location.href = NEXT; }
+        $("pi-hint").textContent = d.trusted ? "Or unlock it on the Pi's screen \u2014 this page will follow."
+                                             : "This browser hasn't signed in since the Pi started: enter a code here.";
+      }).catch(function () {});
+    }, 3000);
     $("toggle-rc").addEventListener("click", function () {
       useRc = !useRc; msg("");
       show(useRc ? "s-rc" : "s-totp");
