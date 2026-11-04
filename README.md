@@ -315,6 +315,30 @@ auto-scan).
     Queue page and Pi screen); **auto-scan skips it** and leaves a note
   - larger than /16: refused
 
+## Deep scans: what they check
+
+A Deep scan (one device at a time: the host card's **Deep scan**, the device
+page, the queue page, or *Deep scan unknowns*) does, on top of Standard:
+
+- the **top 1,000 TCP ports** -- or **all 65,535** with *Deep scan · all
+  ports* on the device page (about 4 minutes more);
+- full **service identification** and an **OS fingerprint**;
+- **safe nmap checks** on the ports found open (`deep.py`): exact **Windows
+  build**, computer name and domain over Remote Desktop (no login);
+  **SMBv1** and **SMB signing**; **certificates** (issuer, expiry, key size);
+  SSH key types and **weak SSH algorithms**; web title / server / missing
+  security headers; **anonymous FTP**; **VNC without a password**;
+- a short **UDP check** (raw sockets needed): **SNMP answering to "public"**
+  (and its system description), NTP, DNS, TFTP, NetBIOS, SSDP, **IPMI**,
+  **BACnet**, SIP, IKE, MS-SQL browser, mDNS.
+
+Results show in **Deep findings** on the device page and carry over to later
+scans of the same device. New findings become flags: SMBv1, SMB signing off,
+SNMP public, Expired cert, Weak cert key, VNC no password, Anonymous FTP,
+Weak SSH crypto, IPMI exposed, and an exact **Old OS** from the Windows build.
+The Windows build, SMB OS, SNMP description, BACnet and IPMI also feed the
+triad (FINGERPRINT / SCAN).
+
 ## Deep scan the unknowns
 
 Network scans never run Deep (top 1000 ports, full service probing, OS

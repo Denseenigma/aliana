@@ -336,7 +336,7 @@
     return "Network" + (j.target ? " " + j.target : j.interface ? " · " + j.interface : "");
   }
   function source(j) {
-    return { "auto": "automatic", "host-card": "from host card", "manual": "manual", "unknowns": "deep scan of unknowns" }[j.source] || j.source || "";
+    return { "auto": "automatic", "host-card": "from host card", "manual": "manual", "unknowns": "deep scan of unknowns", "device-page": "from device page" }[j.source] || j.source || "";
   }
   function flash(text, ok) {
     var m = $("msg");
@@ -402,7 +402,7 @@
     $("wait-kv").innerHTML = d.paused ? "<b>Paused</b>" : "";
     $("queued").innerHTML = d.queued.length ? d.queued.map(function (j) {
       return '<div class="job"><span class="pos">' + j.position + "</span>" +
-        '<div class="what"><span class="t">' + esc(target(j)) + "</span>" + ptag(j.profile) + "</div>" +
+        '<div class="what"><span class="t">' + esc(target(j)) + "</span>" + ptag(j.profile) + (/all_ports/.test(j.options || "") ? ' <span class="tag outline">all ports</span>' : "") + "</div>" +
         '<div class="act">' +
           (j.position > 1 ? '<button type="button" class="ghost sm" data-front="' + j.id + '">Run next</button>' : "") +
           '<button type="button" class="red sm" data-cancel="' + j.id + '">Cancel</button></div>' +
@@ -420,7 +420,7 @@
       } else if (j.error) {
         result = '<span class="err">' + esc(j.error) + "</span>";
       }
-      return '<div class="job"><div class="what"><span class="t">' + esc(target(j)) + "</span>" + ptag(j.profile) +
+      return '<div class="job"><div class="what"><span class="t">' + esc(target(j)) + "</span>" + ptag(j.profile) + (/all_ports/.test(j.options || "") ? ' <span class="tag outline">all ports</span>' : "") +
         '<span class="tag ' + esc(j.status) + '">' + esc(j.status) + "</span></div>" +
         '<div class="act"></div>' +
         '<div class="sub">' + when(j.finished_at) + (took != null && j.started_at ? " · took " + dur(took) : "") +

@@ -249,7 +249,7 @@ def _latest_network_times():
     return out
 
 
-def _summarise(mac, rows, latest_times):
+def _summarise(mac, rows, latest_times, deeps=None):
     import insights
     last = rows[-1]
     # Most recent sighting that actually looked at ports
@@ -258,6 +258,7 @@ def _summarise(mac, rows, latest_times):
     ident = next((r["ident"] for r in reversed(rows) if r.get("ident") and r["ident"].get("sources")), None) \
         or next((r["ident"] for r in reversed(rows) if r.get("ident")), {})
     ident = passive.merge_into(json.loads(json.dumps(ident or {})), mac)   # + heard on the network
+    ident = merge_deep(ident, (deeps if deeps is not None else latest_deep([mac])).get(mac))  # + last Deep checks
     heard = passive.lookup(mac)
     vendor = next((r["vendor"] for r in reversed(rows) if r["vendor"]), None) or ident.get("vendor_db") \
         or identify.vendor_for(mac)
@@ -308,6 +309,38 @@ def _summarise(mac, rows, latest_times):
     return res
 
 
+def latest_deep(macs):
+    """{MAC: deep summary} from each device's most recent Deep scan."""
+    macs = sorted({m.upper() for m in macs if m})
+    if not macs:
+        return {}
+    out = {}
+    conn = _db()
+    try:
+        for i in range(0, len(macs), 500):
+            chunk = macs[i:i + 500]
+            q = ",".join("?" * len(chunk))
+            for r in conn.execute(f"SELECT UPPER(h.mac) AS mac, h.ident FROM hosts h JOIN scans s ON s.id = h.scan_id "
+                                  f"WHERE UPPER(h.mac) IN ({q}) AND s.profile = 'deep' AND h.ident LIKE '%\"deep\"%' "
+                                  f"ORDER BY s.finished_at", chunk):
+                d = scanner._ident(r["ident"]).get("deep")
+                if d:
+                    out[r["mac"]] = (d, scanner._ident(r["ident"]).get("names", {}).get("rdp"))
+    finally:
+        conn.close()
+    return out
+
+
+def merge_deep(ident, found):
+    """Adds a device's last Deep findings to an ident from a later scan."""
+    if found and not ident.get("deep"):
+        d, rdp_name = found
+        ident["deep"] = d
+        if rdp_name:
+            ident.setdefault("names", {}).setdefault("rdp", rdp_name)
+    return ident
+
+
 def _heard_view(rec):
     """Passive-discovery summary for templates: last heard, recently, what."""
     if not rec:
@@ -353,7 +386,8 @@ def list_devices():
     for r in rows:
         by_mac.setdefault(r["mac"], []).append(r)
     latest = _latest_network_times()
-    devices = [_summarise(m, rs, latest) for m, rs in by_mac.items()]
+    deeps = latest_deep(list(by_mac))
+    devices = [_summarise(m, rs, latest, deeps) for m, rs in by_mac.items()]
     devices += [_heard_only(r) for r in passive.heard_devices() if r["mac"] not in by_mac]
     devices.sort(key=lambda d: (not d["present"], d["last_seen"] and -_ts(d["last_seen"]), _ipkey(d["ip"])))
     conn = _db()

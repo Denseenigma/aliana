@@ -23,6 +23,7 @@ import re as _re
 
 import identify as _identify
 import fpdb as _fpdb
+import deep as _deep
 
 # key -> (short code shown in the hex badge, label)
 TYPES = {
@@ -456,6 +457,13 @@ def classify_host(host):
     for t, sc, why in _rmm_clues(host):
         add(t, sc, why, "fingerprint")
         facts.append(why)
+    # -- the last Deep scan's extra checks (deep.py)
+    dsc, dfp, dfacts = _deep.clues(ident.get("deep"))
+    for t, sc, why in dsc:
+        add(t, sc, why, "scan")
+    for t, sc, why in dfp:
+        add(t, sc, why, "fingerprint")
+    facts = dfacts + facts
     # -- SCAN or LISTEN, depending on whether we asked or it announced
     svcs = " ".join(md.get("services") or []) + " "
     for keys, t, sc, why in _MDNS:
@@ -521,7 +529,7 @@ def classify_host(host):
     # -- names, credited to whichever system learned them
     names = ident.get("names") or {}
     name_src = {"netbios": nb_sys, "mdns": md_sys, "mdns_instance": md_sys, "upnp": up_sys,
-                "dns": "scan", "dhcp": "listen", "rmm": "fingerprint"}
+                "dns": "scan", "dhcp": "listen", "rmm": "fingerprint", "rdp": "scan"}
     named = []
     for k, n in names.items():
         if n and (n, name_src.get(k, "scan")) not in named:
@@ -687,11 +695,14 @@ def host_flags(host):
         if label == "HTTP only" and nums & {443, 8443}:
             continue   # has an HTTPS interface too
         flags.append({"key": svc, "level": level, "label": label, "detail": detail, "ports": hit})
+    for key, level, label, detail in _deep.flags((host.get("ident") or {}).get("deep")):
+        if not any(f["key"] == key for f in flags):
+            flags.append({"key": key, "level": level, "label": label, "detail": detail, "ports": []})
     pv = (host.get("ident") or {}).get("passive") or {}
     sig = _fpdb.stack_signature(pv.get("stack"))
     _, _, old = _fpdb.chatter_clues(pv.get("chatter"))
     old = (sig["name"] if sig and sig["old"] else None) or old
-    if old:
+    if old and not any(f["key"] == "old-os" for f in flags):
         flags.append({"key": "old-os", "level": "medium", "label": "Old OS",
                       "detail": f"Its network behaviour matches {old}, which no longer gets security updates.", "ports": []})
     if "BitTorrent" in ((pv.get("chatter") or {}).get("apps") or {}):
@@ -840,7 +851,11 @@ def annotate(scan):
     rmm_counts = {"managed": 0, "missing": 0, "na": 0}
     rmm_on = False
     import passive
+    import history
+    deeps = history.latest_deep([h.get("mac") for h in scan.get("hosts", [])])
     for h in scan.get("hosts", []):
+        if h.get("mac"):
+            h["ident"] = history.merge_deep(h.get("ident") or {}, deeps.get(h["mac"].upper()))
         if h.get("mac"):   # + what the device announced since (passive discovery)
             h["ident"] = passive.merge_into(h.get("ident") or {}, h["mac"])
             if not h.get("hostname") and h["ident"].get("name"):

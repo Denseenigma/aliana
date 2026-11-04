@@ -20,6 +20,7 @@ import socket
 import json
 
 import identify
+import deep as deepchecks
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "aliana.db")
 SCAN_INTERFACE = os.environ.get("ALIANA_IFACE", "usb0")
@@ -387,6 +388,8 @@ def init_db():
     jcols = [r[1] for r in c.execute("PRAGMA table_info(jobs)")]
     if "priority" not in jcols:  # set by "run next"; otherwise jobs run in id order
         c.execute("ALTER TABLE jobs ADD COLUMN priority INTEGER")
+    if "options" not in jcols:   # JSON, e.g. {"all_ports": true} for a Deep scan
+        c.execute("ALTER TABLE jobs ADD COLUMN options TEXT")
     # Jobs left over from before a restart never run by themselves (nobody
     # may be watching) -- mark them so they show up in the queue history.
     now = datetime.datetime.now().isoformat()
@@ -847,12 +850,18 @@ def scan_mode():
     return "syn" if NMAP_PRIVILEGED and has_raw_sockets() else "connect"
 
 
-def _nmap_cmd(profile, subnet, xml_path, privileged):
+def _nmap_cmd(profile, subnet, xml_path, privileged, all_ports=False):
     p = PROFILES[profile]
     cmd = ["nmap"]
     if privileged:
         cmd.append("--privileged")
-    cmd += p["args"]
+    args = list(p["args"])
+    if all_ports and profile == "deep":     # every TCP port instead of the top 1000
+        i = args.index("--top-ports")
+        args[i:i + 2] = ["-p-"]
+        if "--host-timeout" in args:
+            args[args.index("--host-timeout") + 1] = "40m"
+    cmd += args
     if privileged:
         cmd += p.get("privileged_args", [])
     excl = _excluded_networks()
@@ -871,6 +880,8 @@ def _version_cmd(profile, targets, ports, xml_path, privileged):
     cmd = ["nmap"]
     if privileged:
         cmd.append("--privileged")
+    if profile == "deep":   # Deep: the safe NSE checks too (deep.py)
+        cmd += ["--script", ",".join(deepchecks.TCP_SCRIPTS), "--script-timeout", deepchecks.SCRIPT_TIMEOUT]
     cmd += ["-sV"] + p.get("version_args", []) + [
         "-Pn", "-n", "-T3", "--max-rate", "300",
         "--host-timeout", p.get("version_host_timeout", "3m"),
@@ -943,6 +954,8 @@ def _identify_services(profile, hosts, privileged, xml_path, skip_ips=()):
         h2 = found.get(h["ip"])
         if not h2:
             continue         # host hit its time cap (or stage 2 cut short)
+        if h2.get("hostscripts"):
+            h.setdefault("hostscripts", {}).update(h2["hostscripts"])
         by_port = {(p2["protocol"], p2["port"]): p2 for p2 in h2["ports"]}
         for pt in h["ports"]:
             p2 = by_port.get((pt["protocol"], pt["port"]))
@@ -952,10 +965,56 @@ def _identify_services(profile, hosts, privileged, xml_path, skip_ips=()):
             for k in ("service", "product", "version"):
                 if p2.get(k):
                     pt[k] = p2[k]
+            if p2.get("scripts"):
+                pt["scripts"] = p2["scripts"]
     return result
 
 
-def run_scan(subnet=None, profile=None, scope="subnet", interface=None):
+def _udp_stage(hosts, xml_path):
+    """Deep only: a short UDP check (deep.UDP_PORTS) with the UDP scripts
+    (SNMP 'public', NTP, IPMI, BACnet...). Needs raw sockets. Open UDP ports
+    are added to the host's ports. Returns "ok" / "timeout" / "stopped"."""
+    targets = [h["ip"] for h in hosts]
+    if not targets:
+        return "ok"
+    try:
+        os.remove(xml_path)
+    except OSError:
+        pass
+    _progress["stage"] = 2
+    _progress["phase"] = "Checking UDP services"
+    _progress["percent"] = None
+    cmd = ["nmap", "--privileged", "-sU", "-Pn", "-n", "-T3", "--max-rate", "100", "--max-retries", "2",
+           "--host-timeout", "4m", "-p", "U:" + ",".join(str(x) for x in deepchecks.UDP_PORTS),
+           "--script", ",".join(deepchecks.UDP_SCRIPTS), "--script-timeout", "20s",
+           "-v", "--stats-every", "2s", "-oX", xml_path] + targets
+    result = "ok"
+    try:
+        _run_nmap_live(cmd, timeout=600)
+    except ScanStopped:
+        result = "stopped"
+    except (subprocess.TimeoutExpired, RuntimeError):
+        result = "timeout"
+    try:
+        found = {h["ip"]: h for h in _parse_nmap_xml(xml_path)}
+    except Exception:
+        found = {}
+    for h in hosts:
+        h2 = found.get(h["ip"])
+        if not h2:
+            continue
+        have = {(p["protocol"], p["port"]) for p in h["ports"]}
+        for p2 in h2["ports"]:
+            # "open" = it answered; "open|filtered" (silence) proves nothing on UDP
+            if p2["protocol"] == "udp" and (p2["state"] == "open" or p2.get("scripts")) \
+                    and ("udp", p2["port"]) not in have:
+                p2["state"] = "open"
+                p2["probe"] = None
+                h["ports"].append(p2)
+    return result
+
+
+def run_scan(subnet=None, profile=None, scope="subnet", interface=None, all_ports=False):
     """Runs an nmap scan using a scan profile (default: the saved one) and
     stores results. Returns scan_id or None. scope "subnet" scans the subnet
     on `interface` (default: the selected one); scope "host" scans the
@@ -999,7 +1058,7 @@ def run_scan(subnet=None, profile=None, scope="subnet", interface=None):
         mode = scan_mode()
         timeout = PROFILES[profile]["timeout"]
         try:
-            _run_nmap_live(_nmap_cmd(profile, subnet, xml_path, mode == "syn"), timeout=timeout)
+            _run_nmap_live(_nmap_cmd(profile, subnet, xml_path, mode == "syn", all_ports), timeout=timeout)
         except RuntimeError as e:
             if mode != "syn" or not any(k.lower() in str(e).lower() for k in _RAW_ERRORS):
                 raise
@@ -1025,6 +1084,14 @@ def run_scan(subnet=None, profile=None, scope="subnet", interface=None):
         managed = _rmm_managed(hosts) if scope == "subnet" else {}
         if profile != "discovery":
             stage2 = _identify_services(profile, hosts, mode == "syn", xml_path, skip_ips=managed)
+        # Deep: a short UDP check too (raw sockets only)
+        if profile == "deep" and stage2 != "stopped":
+            if mode == "syn":
+                if _udp_stage(hosts, xml_path) == "stopped":
+                    stage2 = "stopped"
+            else:
+                _last_scan_status["notice"] = ((_last_scan_status.get("notice") or "") +
+                                               " UDP checks skipped: no raw sockets (re-run setup.sh).").strip()
 
         # Stage 3: work out what each device is and what it's called
         # (vendor database, NetBIOS, mDNS, UPnP, router DNS, web page titles).
@@ -1032,6 +1099,16 @@ def run_scan(subnet=None, profile=None, scope="subnet", interface=None):
         # identification is switched off or the scan was stopped.
         _identify_devices(hosts, scope, interface, enabled=get_identify_enabled() and stage2 != "stopped",
                           managed=managed)
+        if profile == "deep":   # keep what the Deep checks found (summarised) with the device
+            for h in hosts:
+                d = deepchecks.summarize(h)
+                d["all_ports"] = bool(all_ports)
+                h.setdefault("ident", {})["deep"] = d
+                comp = (d.get("rdp") or {}).get("netbios") or ((d.get("rdp") or {}).get("computer") or "").split(".")[0]
+                if comp:
+                    h["ident"].setdefault("names", {})["rdp"] = comp
+                if not h.get("hostname"):
+                    h["hostname"] = (d.get("rdp") or {}).get("computer") or (d.get("smb") or {}).get("name")
         finished = datetime.datetime.now().isoformat()
 
         scan_id = _store_results(subnet, started, finished, hosts, profile, mode, checked, scope)
@@ -1116,14 +1193,18 @@ def _parse_nmap_xml(path):
             for port_el in ports_el.findall("port"):
                 state_el = port_el.find("state")
                 service_el = port_el.find("service")
-                ports.append({
+                pd = {
                     "port": int(port_el.get("portid")),
                     "protocol": port_el.get("protocol"),
                     "state": state_el.get("state") if state_el is not None else "unknown",
                     "service": service_el.get("name") if service_el is not None else "",
                     "product": service_el.get("product") if service_el is not None else "",
                     "version": service_el.get("version") if service_el is not None else "",
-                })
+                }
+                sc = deepchecks.parse_scripts(port_el)
+                if sc:
+                    pd["scripts"] = sc
+                ports.append(pd)
 
         # OS guess (Deep scans with raw sockets): nmap lists matches best first
         os_name = os_accuracy = os_type = None
@@ -1142,8 +1223,11 @@ def _parse_nmap_xml(path):
 
         # With -v, nmap also lists every address that did NOT respond
         # (status "down") -- skip those, we only want live hosts.
+        hs_el = host_el.find("hostscript")
+        hostscripts = deepchecks.parse_scripts(hs_el) if hs_el is not None else {}
         if addr_ipv4 and status == "up":
             hosts.append({
+                "hostscripts": hostscripts,
                 "ip": addr_ipv4,
                 "mac": mac,
                 "vendor": vendor,
@@ -1472,7 +1556,7 @@ def set_queue_paused(paused):
     _queue_wake.set()
 
 
-def enqueue(kind, target=None, profile=None, source="manual", confirm_large=False):
+def enqueue(kind, target=None, profile=None, source="manual", confirm_large=False, options=None):
     """Adds a scan job. kind "subnet" (target ignored; scans the selected
     interface's subnet with `profile`, default the saved one) or "host"
     (target = one IPv4 address, Deep profile unless given). Returns
@@ -1520,8 +1604,9 @@ def enqueue(kind, target=None, profile=None, source="manual", confirm_large=Fals
         n = c.execute("SELECT COUNT(*) FROM jobs WHERE status = 'queued'").fetchone()[0]
         if n >= MAX_QUEUED:
             return None, f"Queue is full ({MAX_QUEUED} jobs)."
-        c.execute("INSERT INTO jobs (kind, target, interface, profile, source, status, created_at) "
-                  "VALUES (?, ?, ?, ?, ?, 'queued', ?)", (kind, target, iface, profile, source, _now()))
+        c.execute("INSERT INTO jobs (kind, target, interface, profile, source, status, created_at, options) "
+                  "VALUES (?, ?, ?, ?, ?, 'queued', ?, ?)", (kind, target, iface, profile, source, _now(),
+                                                            json.dumps(options) if options else None))
         job_id = c.lastrowid
         conn.commit()
         job = dict(c.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone())
@@ -1656,7 +1741,9 @@ def queue_worker():
             _current_job = job
 
             if job["kind"] == "host":
-                scan_id = run_scan(subnet=job["target"], profile=job["profile"], scope="host")
+                opts = _ident(job.get("options"))
+                scan_id = run_scan(subnet=job["target"], profile=job["profile"], scope="host",
+                                   all_ports=bool(opts.get("all_ports")))
             else:
                 scan_id = run_scan(subnet=job["target"], profile=job["profile"], scope="subnet",
                                    interface=job["interface"])

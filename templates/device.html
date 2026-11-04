@@ -70,6 +70,10 @@
   .lab select, .lab input { width: 100%; }
   .lab-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 0.8rem; }
   .ev-sys.you { color: var(--cyan); border-color: var(--cyan); }
+  .dq { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; font-size: 0.8rem; }
+  .dpg { grid-template-columns: 130px 1fr; }
+  .ok2 { color: var(--green); }
+
 </style>
 </head>
 <body>
@@ -162,6 +166,51 @@
   </section>
 
   <section class="panel">
+    {% set dp = (d.ident or {}).get('deep') %}
+    <div class="panel-head"><h2>Deep findings</h2>
+      <span class="kv">{% if dp %}Deep scan {{ dp.at | when }}{% if dp.all_ports %} &middot; all ports{% endif %}{% else %}no Deep scan yet{% endif %}</span></div>
+    <div class="dq">
+      {% if d.ip %}
+      <button type="button" class="sm" data-dq="0">Deep scan</button>
+      <button type="button" class="ghost sm" data-dq="1" title="Every TCP port (65,535) instead of the top 1,000: finds services on odd ports. Adds about 4 minutes.">Deep scan &middot; all ports</button>
+      <span class="muted2" id="dq-msg"></span>
+      {% endif %}
+    </div>
+    {% if dp %}
+    <div class="idgrid dpg">
+      {% if dp.windows %}<span class="k">Windows</span><span class="v">{{ dp.windows.name }} <span class="muted2">(build {{ dp.windows.version }})</span>{% if dp.windows.old %} <span class="flag medium">Out of support</span>{% endif %}</span>{% endif %}
+      {% if dp.rdp %}<span class="k">Remote Desktop</span><span class="v">{{ dp.rdp.computer or dp.rdp.netbios }}{% if dp.rdp.domain %} &middot; domain {{ dp.rdp.domain }}{% endif %}</span>{% endif %}
+      {% if dp.smb %}<span class="k">File sharing</span><span class="v">
+        {% if dp.smb.v1 %}<span class="flag high">SMBv1 on</span>{% elif dp.smb.dialects %}<span class="ok2">SMBv1 off</span>{% endif %}
+        {% if dp.smb.signing %} &middot; signing {% if dp.smb.signing == 'required' %}<span class="ok2">required</span>{% else %}<span class="flag medium">{{ dp.smb.signing }}</span>{% endif %}{% endif %}
+        {% if dp.smb.os %}<br><span class="muted2">{{ dp.smb.os }}{% if dp.smb.domain %} &middot; {{ dp.smb.domain }}{% endif %}</span>{% endif %}
+        {% if dp.smb.dialects %}<br><span class="muted2">{{ dp.smb.dialects | join(' · ') }}</span>{% endif %}</span>{% endif %}
+      {% for c in dp.certs or [] %}<span class="k">Cert :{{ c.port }}</span><span class="v">{{ c.cn or '–' }}{% if c.issuer and not c.self_signed %} <span class="muted2">from {{ c.issuer }}</span>{% endif %}
+        {% if c.self_signed %} <span class="muted2">self-signed</span>{% endif %}<br>
+        <span class="{{ 'flag medium' if c.expired else 'muted2' }}">{{ 'expired' if c.expired else 'expires' }} {{ (c.not_after or '?')[:10] }}</span>
+        {% if c.key %} <span class="{{ 'flag low' if c.weak_key else 'muted2' }}">&middot; {{ c.key }}</span>{% endif %}</span>{% endfor %}
+      {% if dp.ssh %}<span class="k">SSH :{{ dp.ssh.port }}</span><span class="v">{{ (dp.ssh['keys'] or []) | join(', ') or '–' }}{% if dp.ssh.weak %}<br><span class="flag low">weak: {{ dp.ssh.weak[:5] | join(', ') }}</span>{% endif %}</span>{% endif %}
+      {% for p, h in (dp.http or {}).items() %}<span class="k">Web :{{ p }}</span><span class="v">{{ [h.title, h.server] | select | join(' · ') or '–' }}{% if h.missing %}<br><span class="muted2">missing headers: {{ h.missing | join(', ') }}</span>{% endif %}</span>{% endfor %}
+      {% if dp.ftp_anon %}<span class="k">FTP</span><span class="v"><span class="flag high">anonymous login allowed</span></span>{% endif %}
+      {% if dp.vnc %}<span class="k">VNC :{{ dp.vnc.port }}</span><span class="v">{% if dp.vnc.no_auth %}<span class="flag high">no password</span>{% else %}password required{% endif %}</span>{% endif %}
+      {% if dp.udp_open %}<span class="k">UDP open</span><span class="v mono">{{ dp.udp_open | join(', ') }}</span>{% endif %}
+      {% if dp.snmp %}<span class="k">SNMP</span><span class="v"><span class="flag medium">answers to “public”</span>{% if dp.snmp.sysdescr %}<br><span class="muted2">{{ dp.snmp.sysdescr }}</span>{% endif %}</span>{% endif %}
+      {% if dp.ntp %}<span class="k">NTP</span><span class="v">{{ dp.ntp.values() | join(' · ') }}</span>{% endif %}
+      {% if dp.ipmi %}<span class="k">IPMI</span><span class="v"><span class="flag medium">management controller</span> <span class="muted2">{{ dp.ipmi.output }}</span></span>{% endif %}
+      {% if dp.bacnet %}<span class="k">BACnet</span><span class="v">{{ dp.bacnet.values() | join(' · ') }}</span>{% endif %}
+      {% if dp.upnp %}<span class="k">UPnP</span><span class="v muted2">{{ dp.upnp }}</span>{% endif %}
+      {% if dp.nbstat %}<span class="k">NetBIOS</span><span class="v muted2">{{ dp.nbstat }}</span>{% endif %}
+    </div>
+    {% if not (dp.windows or dp.rdp or dp.smb or dp.certs or dp.ssh or dp.http or dp.ftp_anon or dp.vnc or dp.udp_open) %}
+    <p class="muted2">The Deep checks found nothing extra on this device.</p>{% endif %}
+    {% else %}
+    <p class="muted2">A Deep scan checks 1,000 ports (or all of them), identifies every service, guesses the OS, and runs
+      safe checks: Windows build over Remote Desktop, SMBv1 / signing, certificates, SSH, web headers, anonymous FTP,
+      VNC without a password, and UDP services (SNMP, NTP, IPMI, BACnet&hellip;).</p>
+    {% endif %}
+  </section>
+
+  <section class="panel">
     <div class="panel-head"><h2>Timeline</h2><span class="kv">{{ timeline | length }} sighting{{ 's' if timeline | length != 1 }}</span></div>
     <div class="tl">
       {% if not timeline %}<p class="muted2">Never scanned &mdash; Aliana has only heard this device announce itself on the network.
@@ -205,6 +254,17 @@
   $("lab-save").addEventListener("click", function () {
     send({ type: $("lab-type").value, name: $("lab-name").value, note: $("lab-note").value }).then(function (d) {
       if (d.ok) location.reload(); else $("lab-msg").textContent = d.error || "Couldn't save.";
+    });
+  });
+  document.querySelectorAll("[data-dq]").forEach(function (b) {
+    b.addEventListener("click", function () {
+      b.disabled = true;
+      fetch("/api/queue/host", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ip: {{ d.ip | tojson }}, all_ports: b.getAttribute("data-dq") === "1", source: "device-page" }) })
+        .then(function (r) { return r.json(); }).then(function (d) {
+          $("dq-msg").innerHTML = d.ok ? 'Queued &middot; <a href="/queue">see the queue</a>' : (d.error || "Couldn't queue");
+          if (!d.ok) b.disabled = false;
+        }).catch(function () { b.disabled = false; });
     });
   });
   var c = $("lab-clear");

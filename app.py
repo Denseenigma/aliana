@@ -1119,7 +1119,8 @@ def api_queue_host():
     """JSON {"ip": "..."}: queue a Deep scan of that one host."""
     data = request.get_json(silent=True) or {}
     job, err = scanner.enqueue("host", target=data.get("ip"), profile=data.get("profile"),
-                               source="host-card")
+                               source=data.get("source") or "host-card",
+                               options={"all_ports": True} if data.get("all_ports") else None)
     if err:
         return jsonify({"ok": False, "error": err, "queue": scanner.queue_summary()}), 409
     return jsonify({"ok": True, "job": job, "queue": scanner.queue_summary()})
