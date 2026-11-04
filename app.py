@@ -445,6 +445,8 @@ def _dashboard(scan_id):
         "index.html", scan=scan, status=status, history=history, interfaces=interfaces,
         viewing_old=viewing_old,
         deep=_deep_tray(card_ips),
+        unknowns=deep_unknowns(scan) if scan and not viewing_old else [],
+        deep_minutes_each=DEEP_MINUTES_EACH,
         ask_guard=request.args.get("guard") == "1",
         flash_error=request.args.get("err"),
         excluded={h["ip"]: scanner.is_excluded(h["ip"]) for h in (scan or {}).get("hosts", [])},
@@ -453,6 +455,85 @@ def _dashboard(scan_id):
         intervals=[(sec, _interval_label(sec)) for sec in scanner.INTERVAL_CHOICES],
         own_ips={i["ipv4"].split("/")[0] for i in interfaces if i["ipv4"]},
     )
+
+
+# ---------------------------------------------------------------- deep scan the unknowns
+#
+# Instead of a whole-network Deep scan (slow, and OS detection can upset
+# fragile devices), Deep-scan only the devices the triad couldn't settle.
+
+DEEP_RECENT_DAYS = 3
+DEEP_MINUTES_EACH = 1.5     # rough estimate for the button
+
+
+def _recently_deep_scanned(days=DEEP_RECENT_DAYS):
+    since = (datetime.datetime.now() - datetime.timedelta(days=days)).isoformat()
+    import sqlite3 as _sq
+    conn = _sq.connect(scanner.DB_PATH)
+    try:
+        rows = conn.execute("SELECT UPPER(h.mac), h.ip FROM hosts h JOIN scans s ON s.id = h.scan_id "
+                            "WHERE s.scope = 'host' AND s.profile = 'deep' AND s.finished_at >= ?", (since,)).fetchall()
+        queued = conn.execute("SELECT target FROM jobs WHERE kind = 'host' AND status IN ('queued', 'running')").fetchall()
+    finally:
+        conn.close()
+    return {m for m, _ in rows if m}, {ip for _, ip in rows} | {t for (t,) in queued}
+
+
+def deep_unknowns(scan=None):
+    """Devices in the latest network scan worth a Deep scan: the triad's
+    answer is single-source, disputed or empty (or the MAC maker doesn't fit),
+    and it isn't in the RMM, labelled by you, excluded, this unit, or
+    deep-scanned in the last DEEP_RECENT_DAYS days. -> [host summaries]"""
+    if scan is None:
+        sid = scanner.latest_subnet_scan_id()
+        scan = insights.annotate(scanner.get_scan(sid)) if sid else None
+    if not scan:
+        return []
+    own = {i["ipv4"].split("/")[0] for i in scanner.list_interfaces() if i["ipv4"]}
+    recent_macs, recent_ips = _recently_deep_scanned()
+    out = []
+    for h in scan.get("hosts", []):
+        dev = h.get("device") or {}
+        c = dev.get("consensus") or {}
+        state = c.get("state", "none")
+        if state in ("unanimous", "confirmed") and not c.get("mismatch"):
+            continue
+        if c.get("override") or (h.get("rmm") or {}).get("status") == "managed":
+            continue
+        if h["ip"] in own or scanner.is_excluded(h["ip"]):
+            continue
+        if h["ip"] in recent_ips or (h.get("mac") or "").upper() in recent_macs:
+            continue
+        out.append({"ip": h["ip"], "mac": h.get("mac"), "name": h.get("hostname") or h.get("vendor") or h["ip"],
+                    "label": dev.get("label"), "state": "mismatch" if c.get("mismatch") and state in
+                    ("unanimous", "confirmed") else state})
+    return out
+
+
+@app.route("/api/deep-unknowns", methods=["GET", "POST"])
+def api_deep_unknowns():
+    """GET: the candidates. POST: queue a Deep scan of each (one at a time,
+    through the normal queue)."""
+    hosts = deep_unknowns()
+    if request.method == "GET":
+        return jsonify({"ok": True, "hosts": hosts, "count": len(hosts),
+                        "minutes": round(len(hosts) * DEEP_MINUTES_EACH)})
+    queued, skipped = [], []
+    for h in hosts:
+        job, err = scanner.enqueue("host", target=h["ip"], profile="deep", source="unknowns")
+        (queued if job else skipped).append({"ip": h["ip"], "error": err})
+    return jsonify({"ok": True, "queued": len(queued), "skipped": skipped, "queue": scanner.queue_summary()})
+
+
+def deep_unknowns_auto(job):
+    """on_job_done: after an automatic network scan, Deep-scan the unknowns
+    (setting, off by default)."""
+    if job.get("kind") != "subnet" or job.get("status") != "done" or job.get("source") != "auto":
+        return
+    if scanner._get_setting("deep_unknowns_auto", "0") != "1":
+        return
+    for h in deep_unknowns():
+        scanner.enqueue("host", target=h["ip"], profile="deep", source="unknowns")
 
 
 def _deep_tray(card_ips):
@@ -916,6 +997,7 @@ def _settings_state():
         "exclusions": scanner.get_exclusions(),
         "identify": scanner.get_identify_enabled(),
         "passive": passive.enabled(),
+        "deep_unknowns_auto": scanner._get_setting("deep_unknowns_auto", "0") == "1",
         "kiosk_lock": kiosk_lock_enabled(),
         "kiosk_idle": kiosk_idle(),
         "kiosk_idle_choices": list(KIOSK_IDLE_CHOICES),
@@ -974,6 +1056,8 @@ def api_settings():
             scanner.set_no_probe_ports(items)
         if "identify" in data:
             scanner.set_identify_enabled(bool(data["identify"]))
+        if "deep_unknowns_auto" in data:
+            scanner._set_setting("deep_unknowns_auto", "1" if data["deep_unknowns_auto"] else "0")
         if "kiosk_lock" in data:
             scanner._set_setting("kiosk_lock", "1" if data["kiosk_lock"] else "0")
         if "kiosk_idle" in data:
@@ -1243,6 +1327,7 @@ if __name__ == "__main__":
     scanner.init_db()
     rmm.init_db()
     scanner.on_job_done.append(rmm.maybe_sync_after)
+    scanner.on_job_done.append(deep_unknowns_auto)
     passive.init_db()
     labels.init_db()
     if passive.enabled():

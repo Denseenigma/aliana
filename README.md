@@ -315,6 +315,18 @@ auto-scan).
     Queue page and Pi screen); **auto-scan skips it** and leaves a note
   - larger than /16: refused
 
+## Deep scan the unknowns
+
+Network scans never run Deep (top 1000 ports, full service probing, OS
+detection) on everything -- it's slow at Aliana's packet-rate cap, and OS
+detection can upset fragile devices. Instead the dashboard's Triad bar offers
+**Deep scan N unknowns**: a one-at-a-time Deep scan (through the normal queue)
+of the devices the triad couldn't settle -- single source, disputed, no data,
+or a MAC-maker mismatch. It skips devices in the RMM, ones you've labelled,
+excluded addresses, this unit, and anything Deep-scanned in the last 3 days.
+Settings > Device identification can run it automatically after each
+automatic network scan (off by default).
+
 ## Speed: what Aliana skips
 
 - **Devices already in the RMM** (matched by MAC): network scans only check

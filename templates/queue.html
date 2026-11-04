@@ -336,7 +336,7 @@
     return "Network" + (j.target ? " " + j.target : j.interface ? " · " + j.interface : "");
   }
   function source(j) {
-    return { "auto": "automatic", "host-card": "from host card", "manual": "manual" }[j.source] || j.source || "";
+    return { "auto": "automatic", "host-card": "from host card", "manual": "manual", "unknowns": "deep scan of unknowns" }[j.source] || j.source || "";
   }
   function flash(text, ok) {
     var m = $("msg");

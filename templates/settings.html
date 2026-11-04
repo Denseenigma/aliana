@@ -336,6 +336,13 @@
       <button type="button" class="opt off" data-id="0">Off</button>
       <button type="button" class="opt" data-id="1">On</button>
     </div>
+    <div class="kv" style="margin:10px 0 6px">After automatic scans, Deep-scan the unknowns</div>
+    <div class="opts" id="du-opts">
+      <button type="button" class="opt off" data-du="0">Off</button>
+      <button type="button" class="opt" data-du="1">On</button>
+    </div>
+    <p class="hint">Queues a one-at-a-time Deep scan of each device the triad couldn't settle (skipping RMM-managed,
+      labelled, excluded and recently deep-scanned ones). Same as the <b>Deep scan unknowns</b> button on the dashboard.</p>
     <div class="readout" id="vdb-readout"></div>
     <div class="add" style="margin-top:10px"><button type="button" class="ghost sm" id="vdb-update">Update vendor database</button>
       <span class="hint" style="margin:0">Downloads the latest IEEE registry (needs internet on the Pi).</span></div>
@@ -552,6 +559,13 @@
   }
   setInterval(loadPassive, 10000);
 
+  function renderDeepUnknowns() {
+    document.querySelectorAll("#du-opts .opt").forEach(function (b) {
+      var on = b.getAttribute("data-du") === "1";
+      b.className = "opt" + (on ? "" : " off") + ((on === !!S.deep_unknowns_auto) ? " on" : "");
+    });
+  }
+
   function renderKioskLock() {
     document.querySelectorAll("#kl-opts .opt").forEach(function (b) {
       var on = b.getAttribute("data-kl") === "1";
@@ -566,6 +580,7 @@
   function render() {
     renderIdent();
     renderKioskLock();
+    renderDeepUnknowns();
     renderPassive();
     renderSafety();
     $("prof").textContent = S.profile_label;
@@ -605,6 +620,8 @@
       save({ no_probe_ports: S.no_probe_default });
     } else if (b.hasAttribute("data-id")) {
       save({ identify: b.getAttribute("data-id") === "1" });
+    } else if (b.hasAttribute("data-du")) {
+      save({ deep_unknowns_auto: b.getAttribute("data-du") === "1" });
     } else if (b.hasAttribute("data-kl")) {
       save({ kiosk_lock: b.getAttribute("data-kl") === "1" });
     } else if (b.hasAttribute("data-kli")) {
