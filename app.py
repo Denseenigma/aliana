@@ -90,12 +90,39 @@ def ago(iso):
 _PUBLIC_ENDPOINTS = {
     "static", "login_page", "setup_page", "reset_page", "logout",
     "api_auth_login", "api_auth_pair", "api_auth_enroll", "api_auth_qr",
-    "api_auth_reset_request", "api_auth_reset",
+    "api_auth_reset_request", "api_auth_reset", "api_auth_lock",
 }
 
 
 def _is_local():
     return request.remote_addr in ("127.0.0.1", "::1")
+
+
+KIOSK_IDLE_CHOICES = (120, 300, 900, 3600)
+
+
+def kiosk_lock_enabled():
+    """The Pi's own screen asks for a code too (setting, on by default)."""
+    return scanner._get_setting("kiosk_lock", "1") == "1"
+
+
+def kiosk_idle():
+    try:
+        v = int(scanner._get_setting("kiosk_idle", "300"))
+    except (TypeError, ValueError):
+        v = 300
+    return v if v in KIOSK_IDLE_CHOICES else 300
+
+
+def _kiosk_locked():
+    """The Pi screen is locked: lock on, an authenticator exists (otherwise
+    there'd be no way to unlock), and the screen's browser isn't signed in."""
+    return kiosk_lock_enabled() and auth.is_configured() and not _signed_in()
+
+
+# What a locked Pi screen may still reach: its page, the lock screen's state
+# (clock, pairing / reset codes) and cancelling a reset request.
+_LOCKED_SCREEN_ENDPOINTS = {"kiosk", "api_kiosk", "api_auth_reset_cancel"}
 
 
 def _signed_in():
@@ -116,7 +143,9 @@ def _safe_next(target):
 
 @app.before_request
 def _require_sign_in():
-    if _is_local() or request.endpoint in _PUBLIC_ENDPOINTS or _signed_in():
+    if request.endpoint in _PUBLIC_ENDPOINTS or _signed_in():
+        return None
+    if _is_local() and (not _kiosk_locked() or request.endpoint in _LOCKED_SCREEN_ENDPOINTS):
         return None
     if request.path.startswith("/api/") or request.method != "GET":
         return jsonify({"ok": False, "locked": True, "error": "Aliana is locked. Sign in again."}), 401
@@ -247,6 +276,13 @@ def api_auth_reset():
     _erase_everything_sensitive()
     session.clear()
     session["enroll"] = auth.start_enrollment()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/auth/lock", methods=["POST"])
+def api_auth_lock():
+    """Sign this browser out (the Pi screen's lock button / idle timeout)."""
+    session.clear()
     return jsonify({"ok": True})
 
 
@@ -493,7 +529,16 @@ def _kiosk_state():
 
 @app.route("/api/kiosk")
 def api_kiosk():
+    lock = {"enabled": kiosk_lock_enabled() and auth.is_configured(), "idle": kiosk_idle()}
+    if _is_local() and _kiosk_locked():
+        # Locked: only what the lock screen shows -- no scan data
+        state = {"locked": True, "lock": lock, "hostname": socket.gethostname(),
+                 "interface": scanner.get_current_interface(), "addresses": _pairing_urls()}
+        state["pairing"] = auth.pairing_display()
+        return jsonify(state)
     state = _kiosk_state()
+    state["locked"] = False
+    state["lock"] = lock
     # The pairing code only ever goes to the Pi's own screen
     pairing = auth.pairing_display() if _is_local() else None
     if pairing and pairing["reason"] == "setup":
@@ -781,6 +826,9 @@ def _settings_state():
         "exclusions": scanner.get_exclusions(),
         "identify": scanner.get_identify_enabled(),
         "passive": passive.enabled(),
+        "kiosk_lock": kiosk_lock_enabled(),
+        "kiosk_idle": kiosk_idle(),
+        "kiosk_idle_choices": list(KIOSK_IDLE_CHOICES),
         "passive_status": passive.status(),
         "vendor_db": identify.oui_info(),
         "guard": _safe_guard(),
@@ -836,6 +884,16 @@ def api_settings():
             scanner.set_no_probe_ports(items)
         if "identify" in data:
             scanner.set_identify_enabled(bool(data["identify"]))
+        if "kiosk_lock" in data:
+            scanner._set_setting("kiosk_lock", "1" if data["kiosk_lock"] else "0")
+        if "kiosk_idle" in data:
+            try:
+                v = int(data["kiosk_idle"])
+            except (TypeError, ValueError):
+                v = 0
+            if v not in KIOSK_IDLE_CHOICES:
+                return jsonify({"ok": False, "error": "Unsupported idle time."}), 400
+            scanner._set_setting("kiosk_idle", str(v))
         if "passive" in data:
             passive.set_enabled(bool(data["passive"]))
         if "exclusions" in data:

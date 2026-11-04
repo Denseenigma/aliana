@@ -9,6 +9,10 @@
       if (r.status === 401) {
         r.clone().json().then(function (d) {
           if (d && d.locked) {
+            if (window.top === window && location.pathname.indexOf("/kiosk") === 0) {
+              window.dispatchEvent(new Event("aliana-locked"));   // the Pi screen shows its own lock
+              return;
+            }
             var w = window.top || window;
             w.location.href = "/login?next=" + encodeURIComponent(w.location.pathname + w.location.search);
           }

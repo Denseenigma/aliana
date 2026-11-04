@@ -400,9 +400,15 @@ Profiles are defined in `PROFILES` at the top of `scanner.py`.
 
 There's no password: browsers unlock Aliana with the **6-digit code from an
 authenticator app** on your phone (Microsoft / Google Authenticator, Authy,
-1Password, Bitwarden... any TOTP app). A browser stays signed in for 12 hours;
-**Lock** in the header signs out. The Pi's own screen (requests from the Pi
-itself) never asks.
+1Password, Bitwarden... any TOTP app). A browser stays signed in for 12 hours
+(or until the Pi reboots); **Lock** in the header signs out.
+
+**Pi screen lock** (Settings > Access control, on by default): the touchscreen
+shows a LOCKED screen with a keypad after every boot and after sitting idle
+(2 min - 1 h, default 5 min); enter the authenticator code to unlock, or tap
+the padlock by the clock to lock it. While locked it shows no scan data, but
+setup and reset codes still appear on it. No phone? Sign in from a browser
+with a recovery code and turn the screen lock off.
 
 **First run:** opening Aliana in a browser goes to the setup page. It asks for
 a **pairing code shown on the Pi's screen** (proof you have the device in
