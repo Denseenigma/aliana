@@ -503,6 +503,33 @@ signal and address, plus a QR code that opens the Wi-Fi page on a phone
 (the phone needs to be on a network that can reach the Pi, and signs in with
 the authenticator code first).
 
+### Phone setup hotspot (no network needed)
+
+When the Pi isn't on any network yet, tap **PHONE SETUP** in the Wi-Fi
+panel (or **WI-FI SETUP** on the lock screen / pairing screen). The Pi
+turns its Wi-Fi into a temporary access point:
+
+1. The screen shows a QR code. Scan it with the phone camera to join
+   `Aliana-Setup-XXXX` (a fresh random password each time, also shown).
+2. The phone's "sign in to network" page pops up with Aliana's Wi-Fi page
+   (or open `http://10.42.0.1:8080/wifi`). Pick the network and enter its
+   password.
+3. The hotspot closes and the Pi joins that network. Your phone drops off;
+   watch the Pi's screen for the result. If the password was wrong, the
+   hotspot comes back with the error so you can rejoin and retry.
+
+Safety: only someone at the Pi (or already signed in) can start the
+hotspot; it times out after 15 minutes; a phone on the hotspot can reach
+only the Wi-Fi setup page, never scan data or settings. The phone also
+sends its clock so the Pi (which has no RTC) gets a sane time before NTP.
+
+This needs `setup.sh` re-run once: it installs `dnsmasq-base`, the captive
+DNS rule (`/etc/NetworkManager/dnsmasq-shared.d/aliana-captive.conf`), a
+sudoers rule allowing only `date -s`, and `CAP_NET_BIND_SERVICE` so the
+service can answer the captive-portal check on port 80. The Pi can't host
+the hotspot and stay on another Wi-Fi network at the same time, so while
+it's up the Pi is reachable only over Ethernet/USB and the hotspot.
+
 If Wi-Fi shows as off or `nmcli device` lists wlan0 as "unavailable", the
 radio is blocked or the Wi-Fi country isn't set yet (use your country code):
 

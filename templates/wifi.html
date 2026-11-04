@@ -233,6 +233,9 @@
   h2, .panel h2 { font-size: 0.95rem; letter-spacing: 0.1em; }
   .status-bar, .profile-desc { font-size: 0.95rem; }
   select { font-family: var(--label); font-size: 0.95rem; }
+  .hs-banner { border: 1px solid var(--cyan, #00e5ff); border-left: 6px solid var(--cyan, #00e5ff); background: #001619;
+               color: var(--text); padding: 10px 14px; margin-bottom: 16px; line-height: 1.45; font-size: 0.92rem; }
+  .hs-banner b { color: var(--cyan, #00e5ff); font-weight: inherit; }
 </style>
 </head>
 <body>
@@ -254,6 +257,9 @@
 </header>
 
 <div class="msg" id="msg"></div>
+<div class="hs-banner" id="hs-banner" hidden>You're on <b id="hs-name">Aliana's setup hotspot</b>. Pick the Wi-Fi network
+  the Pi should join below. When you connect, this hotspot closes and your phone drops off it &mdash; watch the Pi's screen
+  for the result. If it doesn't work, the hotspot comes back: rejoin it and try again.</div>
 
 <section class="panel">
   <div class="panel-head"><h2>Current link</h2></div>
@@ -276,7 +282,7 @@
   </details>
 </section>
 
-<section class="panel">
+<section class="panel" id="phone-panel">
   <div class="panel-head"><h2>Open on your phone</h2></div>
   <div class="phone">
     <div class="phone-qr"><img id="qr" alt="QR code for this page" src="/api/wifi/qr.svg"></div>
@@ -285,7 +291,7 @@
   </div>
 </section>
 
-<section class="panel">
+<section class="panel" id="saved-panel">
   <div class="panel-head"><h2>Saved networks</h2></div>
   <div id="saved"><div class="muted">Loading&hellip;</div></div>
 </section>
@@ -330,17 +336,21 @@
     var s = d.status, html = "";
     if (!s.available) {
       html = '<dt>Status</dt><dd class="bad">No Wi-Fi adapter found</dd>';
+    } else if (s.state === "hotspot") {
+      html = '<dt>Status</dt><dd class="ok">Setup hotspot on</dd>' +
+        "<dt>Hotspot</dt><dd>" + esc(s.ssid || "") + "</dd>" +
+        '<dt></dt><dd class="muted">Pick a network below and the Pi will switch to it.</dd>';
     } else if (!s.radio) {
       html = '<dt>Status</dt><dd class="bad">Wi-Fi radio is off</dd><dt></dt><dd class="muted">Scanning or connecting will switch it on.</dd>';
     } else if (s.state === "connected") {
       html = '<dt>Status</dt><dd class="ok">Connected</dd>' +
         "<dt>Network</dt><dd>" + esc(s.ssid || s.connection) + "</dd>" +
         "<dt>Signal</dt><dd>" + (s.signal != null ? bars(s.signal) + " " + s.signal + "%" : "&ndash;") + "</dd>" +
-        "<dt>Address</dt><dd>" + esc(s.ip || "&ndash;") + "</dd>";
+        "<dt>Address</dt><dd>" + (s.ip ? esc(s.ip) : "&ndash;") + "</dd>";
     } else {
       html = '<dt>Status</dt><dd class="bad">' + esc(s.state === "connecting" ? "Connecting…" : "Not connected") + "</dd>";
     }
-    html += "<dt>Adapter</dt><dd>" + esc(s.device || "&ndash;") + "</dd>";
+    html += "<dt>Adapter</dt><dd>" + (s.device ? esc(s.device) : "&ndash;") + "</dd>";
     $("link").innerHTML = html;
 
     if (!d.saved.length) {
@@ -354,11 +364,22 @@
     }
   }
 
+  var onHotspot = false, clockSent = false;
   function loadLink() {
     return fetch("/api/wifi", { cache: "no-store" })
       .then(function (r) { return r.json(); })
       .then(function (d) {
         $("setup-url").textContent = d.setup_url || "";
+        onHotspot = !!d.on_hotspot;
+        $("hs-banner").hidden = !onHotspot;
+        if (d.hotspot && d.hotspot.ssid) $("hs-name").textContent = d.hotspot.ssid;
+        $("phone-panel").hidden = onHotspot || !!(d.hotspot && d.hotspot.active);
+        $("saved-panel").hidden = !!(d.hotspot && d.hotspot.active);
+        if (onHotspot && !clockSent) {      // a Pi that booted without internet has the wrong time
+          clockSent = true;
+          fetch("/api/wifi/clock", { method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ time: Date.now() / 1000 }) }).catch(function () {});
+        }
         if (!d.ok) throw new Error(d.error || "Request failed");
         renderLink(d);
       })
@@ -405,6 +426,12 @@
     message("Connecting to " + ssid + "… this can take up to 30 seconds.");
     api("/api/wifi/connect", { ssid: ssid, password: password })
       .then(function (d) {
+        if (d.switching) {
+          message("The Pi is switching to " + ssid + " now, so this hotspot is closing. Check the Pi's screen. " +
+                  "If it couldn't join, the hotspot comes back in about a minute \u2014 rejoin it and try again.", "success");
+          button.textContent = "Switching\u2026";
+          return;
+        }
         var ip = d.status && d.status.ip;
         message("Connected to " + ssid + (ip ? " — Aliana is now at http://" + ip + ":8080" : "") + ".", "success");
         return Promise.all([loadLink(), scan()]);

@@ -12,7 +12,9 @@ Environment=ALIANA_SCAN_INTERVAL=300
 Environment=ALIANA_AUTO_SCAN=0
 # Passive discovery (passive.py) listens for DHCP/ARP/mDNS announcements:
 # needs raw sockets. Listen-only; nothing is sent.
-AmbientCapabilities=CAP_NET_RAW
+# Port 80 is only used while the phone Wi-Fi setup hotspot runs (it sends
+# phones to the Wi-Fi page).
+AmbientCapabilities=CAP_NET_RAW CAP_NET_BIND_SERVICE
 ExecStart=/home/admin/aliana/venv/bin/python3 /home/admin/aliana/app.py
 Restart=on-failure
 RestartSec=5

@@ -174,6 +174,26 @@ if ! sudo visudo -cf /etc/sudoers.d/aliana-nmcli >/dev/null; then
     sudo rm -f /etc/sudoers.d/aliana-nmcli
 fi
 
+echo "==> Phone Wi-Fi setup hotspot (captive portal)..."
+# NetworkManager's hotspot ("shared" mode) needs dnsmasq; while the setup
+# hotspot runs, every name a phone looks up points at the Pi, so the phone
+# pops up Aliana's Wi-Fi page by itself.
+if ! command -v dnsmasq >/dev/null 2>&1 && ! [ -x /usr/sbin/dnsmasq ]; then
+    sudo apt-get install -y dnsmasq-base >/dev/null 2>&1 || echo "    WARNING: couldn't install dnsmasq-base (needs internet)"
+fi
+sudo mkdir -p /etc/NetworkManager/dnsmasq-shared.d
+echo "address=/#/10.42.0.1" | sudo tee /etc/NetworkManager/dnsmasq-shared.d/aliana-captive.conf > /dev/null
+# The Pi has no clock battery: after booting without internet its clock is
+# wrong and authenticator codes can't match. The setup page sends the
+# phone's time, and Aliana may set the clock (only while it isn't synced).
+DATE_BIN="$(command -v date || echo /usr/bin/date)"
+echo "$ALIANA_USER ALL=(root) NOPASSWD: $DATE_BIN -s *" | sudo tee /etc/sudoers.d/aliana-date > /dev/null
+sudo chmod 440 /etc/sudoers.d/aliana-date
+if ! sudo visudo -cf /etc/sudoers.d/aliana-date >/dev/null; then
+    echo "    WARNING: sudoers entry failed validation, removing it"
+    sudo rm -f /etc/sudoers.d/aliana-date
+fi
+
 echo "==> Installing/updating systemd service..."
 sudo cp "$REPO_DIR/aliana.service" /etc/systemd/system/aliana.service
 sudo systemctl daemon-reload

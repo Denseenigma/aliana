@@ -177,7 +177,18 @@ def _kiosk_locked():
 
 # What a locked Pi screen may still reach: its page, the lock screen's state
 # (clock, pairing / reset codes) and cancelling a reset request.
-_LOCKED_SCREEN_ENDPOINTS = {"kiosk", "api_kiosk", "api_auth_reset_cancel", "api_auth_activity"}
+_LOCKED_SCREEN_ENDPOINTS = {"kiosk", "api_kiosk", "api_auth_reset_cancel", "api_auth_activity",
+                            "api_wifi_hotspot", "api_wifi_hotspot_qr"}
+# A phone on the setup hotspot may only do Wi-Fi setup (and set the clock).
+_HOTSPOT_ENDPOINTS = {"wifi_page", "api_wifi", "api_wifi_scan", "api_wifi_connect", "api_wifi_clock"}
+
+
+def _from_hotspot():
+    import ipaddress as _ip
+    try:
+        return wifi.hotspot_info()["active"] and _ip.ip_address(request.remote_addr) in _ip.ip_network("10.42.0.0/24")
+    except ValueError:
+        return False
 
 
 def _trusted():
@@ -214,6 +225,8 @@ def _require_sign_in():
         return None
     if _is_local() and (not _kiosk_locked() or request.endpoint in _LOCKED_SCREEN_ENDPOINTS):
         return None
+    if request.endpoint in _HOTSPOT_ENDPOINTS and _from_hotspot():
+        return None     # on the setup hotspot (its password is only on the Pi screen): Wi-Fi setup only
     if request.path.startswith("/api/") or request.method != "GET":
         return jsonify({"ok": False, "locked": True, "error": "Aliana is locked. Sign in again."}), 401
     page = "login_page" if auth.is_configured() else "setup_page"
@@ -705,10 +718,12 @@ def api_kiosk():
         state = {"locked": True, "lock": lock, "build": BUILD, "hostname": socket.gethostname(),
                  "interface": scanner.get_current_interface(), "addresses": _pairing_urls()}
         state["pairing"] = auth.pairing_display()
+        state["hotspot"] = _hotspot_brief()
         return jsonify(state)
     state = _kiosk_state()
     state["locked"] = False
     state["lock"] = lock
+    state["hotspot"] = _hotspot_brief() if _is_local() else None
     state["build"] = BUILD
     # The pairing code only ever goes to the Pi's own screen
     pairing = auth.pairing_display() if _is_local() else None
@@ -1238,14 +1253,23 @@ def api_wifi():
     # setup_url (and the QR code) don't depend on NetworkManager, so they're
     # always returned -- even when the Wi-Fi status itself can't be read.
     url = _setup_url()
+    hs = wifi.hotspot_info()
+    hs.pop("password", None)
+    hs.pop("join_qr", None)
+    extra = {"setup_url": url, "hotspot": hs, "on_hotspot": _from_hotspot()}
+    if hs["active"]:    # the radio is busy being the hotspot
+        return jsonify({"ok": True, "status": {"available": True, "state": "hotspot", "ssid": hs.get("ssid")},
+                        "saved": [], **extra})
     try:
-        return jsonify({"ok": True, "status": wifi.status(), "saved": wifi.saved(), "setup_url": url})
+        return jsonify({"ok": True, "status": wifi.status(), "saved": wifi.saved(), **extra})
     except wifi.WifiError as e:
-        return jsonify({"ok": False, "error": str(e), "setup_url": url})
+        return jsonify({"ok": False, "error": str(e), **extra})
 
 
 @app.route("/api/wifi/scan")
 def api_wifi_scan():
+    if wifi.hotspot_info()["active"]:      # can't scan while being the hotspot: the list from just before
+        return jsonify({"ok": True, "networks": wifi.hotspot_networks(), "cached": True})
     try:
         return jsonify({"ok": True, "networks": wifi.scan()})
     except wifi.WifiError as e:
@@ -1259,9 +1283,117 @@ def api_wifi_connect():
     if not ssid:
         return _wifi_error("Network name is required.")
     try:
+        if wifi.hotspot_info()["active"]:
+            # answer now; the hotspot closes in 2 s and the Pi joins `ssid`
+            return jsonify({"ok": True, "switching": True, **wifi.hotspot_connect(ssid, data.get("password") or None)})
         return jsonify({"ok": True, "status": wifi.connect(ssid, data.get("password") or None)})
     except wifi.WifiError as e:
         return _wifi_error(e)
+
+
+@app.route("/api/wifi/hotspot", methods=["GET", "POST"])
+def api_wifi_hotspot():
+    """The Pi screen's phone-setup hotspot. GET: state (+ password on the Pi
+    screen / signed-in browsers). POST {"action": "start"|"stop"}: the Pi
+    screen (even locked -- it's how a Pi with no network gets one) or a
+    signed-in browser."""
+    if not (_is_local() or _signed_in()):
+        return jsonify({"ok": False, "locked": True, "error": "Sign in first."}), 401
+    try:
+        if request.method == "POST":
+            act = (request.get_json(silent=True) or {}).get("action")
+            if act == "start":
+                wifi.hotspot_start()
+                _captive_start()
+            elif act == "stop":
+                wifi.hotspot_stop()
+        info = wifi.hotspot_info()
+        if not info["active"]:
+            _captive_stop()
+        return jsonify({"ok": True, **info})
+    except wifi.WifiError as e:
+        return _wifi_error(e)
+
+
+@app.route("/api/wifi/hotspot/qr.svg")
+def api_wifi_hotspot_qr():
+    info = wifi.hotspot_info()
+    if not info["active"] or not (_is_local() or _signed_in()):
+        return Response(status=404)
+    return Response(qr.svg(info["join_qr"]), mimetype="image/svg+xml", headers={"Cache-Control": "no-store"})
+
+
+@app.route("/api/wifi/clock", methods=["POST"])
+def api_wifi_clock():
+    """The phone on the setup hotspot sends its time. If the Pi's clock isn't
+    synced (no internet since boot) and is off by > 2 min, set it -- otherwise
+    authenticator codes can't match. Never touches a synced clock."""
+    try:
+        t = float((request.get_json(silent=True) or {}).get("time"))
+    except (TypeError, ValueError):
+        return jsonify({"ok": False}), 400
+    skew = t - time.time()
+    if abs(skew) < 120:
+        return jsonify({"ok": True, "set": False, "skew": round(skew)})
+    synced = subprocess.run(["timedatectl", "show", "-p", "NTPSynchronized", "--value"],
+                            capture_output=True, text=True).stdout.strip() == "yes"
+    if synced:
+        return jsonify({"ok": True, "set": False, "synced": True, "skew": round(skew)})
+    r = subprocess.run(["sudo", "-n", "date", "-s", "@%d" % int(t)], capture_output=True, text=True)
+    print(f"aliana wifi: clock {'set' if r.returncode == 0 else 'NOT set'} from the setup phone ({skew:+.0f} s)",
+          flush=True)
+    return jsonify({"ok": r.returncode == 0, "set": r.returncode == 0, "skew": round(skew)})
+
+
+def _hotspot_brief():
+    hs = wifi.hotspot_info()
+    if not hs["active"]:
+        _captive_stop()
+    return {"active": hs["active"], "busy": hs["busy"]}
+
+
+# Captive portal: while the hotspot runs, anything a phone opens on port 80
+# (its "am I online?" check) is sent to the Wi-Fi page, so it pops up.
+_captive = {"server": None}
+
+
+def _captive_start():
+    if _captive["server"]:
+        return
+    import http.server
+
+    class Redirect(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(302)
+            self.send_header("Location", f"http://{wifi.HOTSPOT_IP}:{PORT}/wifi")
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+        do_HEAD = do_POST = do_GET
+
+        def log_message(self, *a):
+            pass
+
+    def serve():
+        for _ in range(20):     # the hotspot address takes a moment to appear
+            try:
+                srv = http.server.ThreadingHTTPServer((wifi.HOTSPOT_IP, 80), Redirect)
+                break
+            except OSError:
+                time.sleep(1)
+        else:
+            print("aliana wifi: couldn't open port 80 for the setup page pop-up (run setup.sh)", flush=True)
+            return
+        _captive["server"] = srv
+        srv.serve_forever()
+        srv.server_close()
+    threading.Thread(target=serve, daemon=True).start()
+
+
+def _captive_stop():
+    srv = _captive.pop("server", None)
+    _captive["server"] = None
+    if srv:
+        threading.Thread(target=srv.shutdown, daemon=True).start()
 
 
 @app.route("/api/wifi/forget", methods=["POST"])

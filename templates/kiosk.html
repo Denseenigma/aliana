@@ -615,7 +615,7 @@
     --c: var(--orange);
     position: fixed;
     top: var(--inset-top); right: var(--inset-right); bottom: var(--inset-bottom); left: var(--inset-left);
-    z-index: 39;
+    z-index: 38;
     display: none;
     flex-direction: column;
     align-items: center;
@@ -648,7 +648,7 @@
   .klock {
     position: fixed;
     top: var(--inset-top); right: var(--inset-right); bottom: var(--inset-bottom); left: var(--inset-left);
-    z-index: 38;
+    z-index: 37;
     display: none;
     grid-template-columns: 1fr 236px;
     gap: 10px;
@@ -682,6 +682,32 @@
   #clock.lockable::before { content: ""; width: 10px; height: 12px; background: var(--orange);
     -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 12'%3E%3Cpath d='M2 5V3.5a3 3 0 0 1 6 0V5h1v7H1V5zM3.5 5h3V3.5a1.5 1.5 0 0 0-3 0z'/%3E%3C/svg%3E") center / contain no-repeat;
             mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 12'%3E%3Cpath d='M2 5V3.5a3 3 0 0 1 6 0V5h1v7H1V5zM3.5 5h3V3.5a1.5 1.5 0 0 0-3 0z'/%3E%3C/svg%3E") center / contain no-repeat; }
+
+  /* --- Phone setup hotspot --- */
+  .hspot {
+    position: fixed;
+    top: var(--inset-top); right: var(--inset-right); bottom: var(--inset-bottom); left: var(--inset-left);
+    z-index: 39;
+    display: none;
+    flex-direction: column;
+    gap: 6px;
+    padding: 5px 6px 6px;
+    background: #000;
+  }
+  .hspot.show { display: flex; }
+  .hs-body { flex: 1; display: flex; gap: 10px; align-items: center; min-height: 0; }
+  .hs-body .qr { width: 190px; height: 190px; }
+  .hs-info { flex: 1; display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+  .hs-step { font-family: var(--cond); font-size: 11px; letter-spacing: 0.1em; color: var(--muted); margin-top: 4px; }
+  .hs-step b { display: inline-block; width: 15px; height: 15px; line-height: 15px; text-align: center; background: var(--orange);
+               color: #000; font-weight: normal; margin-right: 4px; }
+  .hs-net { font-family: var(--title); font-size: 21px; line-height: 22px; color: var(--orange); word-break: break-all; }
+  .hs-k { font-family: var(--cond); font-size: 10px; letter-spacing: 0.16em; color: var(--muted); }
+  .hs-pw { font-family: var(--cond); font-size: 20px; letter-spacing: 0.12em; color: var(--text); }
+  .hs-url { font-family: var(--cond); font-size: 15px; color: var(--orange); text-transform: none; }
+  .hs-status { margin-top: auto; font-family: var(--cond); font-size: 12px; letter-spacing: 0.08em; color: var(--text); line-height: 1.3; }
+  .hs-status.ok { color: var(--green); } .hs-status.bad { color: var(--red); }
+  .kl-wifi { margin-top: 6px; align-self: flex-start; font-size: 13px; padding: 6px 12px; }
 
   /* --- Boot sequence --- */
   .boot {
@@ -824,6 +850,7 @@
     <div class="kl-host" id="kl-host"></div>
     <div class="kl-addr" id="kl-addr"></div>
     <div class="kl-hint">ENTER THE 6-DIGIT CODE FROM YOUR AUTHENTICATOR APP.<br>NO PHONE? SIGN IN FROM A BROWSER WITH A RECOVERY CODE.</div>
+    <button type="button" class="secondary kl-wifi" id="kl-wifi">WI-FI SETUP</button>
   </div>
   <div class="kl-pad">
     <div class="kl-code" id="kl-code"><i></i><i></i><i></i><i></i><i></i><i></i></div>
@@ -834,6 +861,25 @@
       <button type="button">7</button><button type="button">8</button><button type="button">9</button>
       <button type="button" class="secondary fn" data-k="clr">CLEAR</button><button type="button">0</button>
       <button type="button" class="secondary fn" data-k="del">&#9003;</button>
+    </div>
+  </div>
+</section>
+
+<section class="hspot" id="hspot">
+  <div class="wifi-head">
+    <div class="wifi-title">PHONE SETUP</div>
+    <div class="hazard"></div>
+    <button id="hs-stop" class="secondary" type="button">STOP</button>
+  </div>
+  <div class="hs-body">
+    <div class="qr" id="hs-qr"><div class="none">Starting&hellip;</div></div>
+    <div class="hs-info">
+      <div class="hs-step"><b>1</b> SCAN WITH YOUR PHONE CAMERA TO JOIN</div>
+      <div class="hs-net" id="hs-ssid">&ndash;</div>
+      <div class="hs-k">PASSWORD</div><div class="hs-pw" id="hs-pw">&ndash;</div>
+      <div class="hs-step"><b>2</b> THE WI-FI PAGE OPENS &mdash; OR GO TO</div>
+      <div class="hs-url" id="hs-url">&ndash;</div>
+      <div class="hs-status" id="hs-status">WAITING FOR YOUR PHONE&hellip;</div>
     </div>
   </div>
 </section>
@@ -873,6 +919,7 @@
   <div class="wifi-head">
     <div class="wifi-title">WIRELESS LINK</div>
     <div class="hazard"></div>
+    <button id="wifi-phone" type="button">PHONE SETUP</button>
     <button id="wifi-close" class="secondary" type="button">CLOSE</button>
   </div>
   <div class="wifi-body">
@@ -1089,13 +1136,66 @@
     var esc = function (t) { return String(t).replace(/[&<>"]/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]; }); };
     $("pair-urls").innerHTML = reset ? "" : urls.length
       ? urls.map(function (u) { return '<div class="k">' + esc(u.label) + '</div><div class="u">' + esc(u.url) + "</div>"; }).join("")
-      : '<div class="none">NO NETWORK ADDRESS YET \u2014 CONNECT A NETWORK CABLE OR THE USB-C LINK</div>';
+      : '<div class="none">NO NETWORK ADDRESS YET \u2014 CONNECT A NETWORK CABLE, THE USB-C LINK, OR SET UP WI-FI FROM YOUR PHONE</div>' +
+        '<button type="button" class="secondary kl-wifi" id="pair-wifi">WI-FI SETUP</button>';
   }
+  $("pair-urls").addEventListener("click", function (e) { if (e.target && e.target.id === "pair-wifi") hsStart(); });
   $("pair-cancel").addEventListener("click", function () {
     if (!/reset/.test($("pairing").className)) {   // setup code: just hide it until it changes
       pairHidden = pairShown; $("pairing").className = "pairing"; return;
     }
     fetch("/api/auth/reset/cancel", { method: "POST" }).then(poll, poll);
+  });
+
+  // ---------- phone setup hotspot
+  var hsTimer = null, hsOpen = false, hsQrFor = "";
+  function hsRender(d) {
+    var st = $("hs-status");
+    if (d.active) {
+      $("hs-ssid").textContent = d.ssid; $("hs-pw").textContent = d.password; $("hs-url").textContent = d.url;
+      if (hsQrFor !== d.ssid + d.password) {
+        hsQrFor = d.ssid + d.password;
+        $("hs-qr").innerHTML = '<img alt="" src="/api/wifi/hotspot/qr.svg?t=' + Date.now() + '">';
+      }
+      if (d.busy) { st.className = "hs-status"; st.textContent = "SWITCHING THE PI TO " + String(d.busy).toUpperCase() + "\u2026"; }
+      else if (d.result && !d.result.ok) { st.className = "hs-status bad"; st.textContent = String(d.result.message).toUpperCase() + " \u2014 TRY AGAIN ON YOUR PHONE."; }
+      else { st.className = "hs-status"; st.textContent = "WAITING FOR YOUR PHONE\u2026 (CLOSES IN " + Math.ceil(d.expires_in / 60) + " MIN)"; }
+    } else if (d.busy) {
+      st.className = "hs-status"; st.textContent = "SWITCHING THE PI TO " + String(d.busy).toUpperCase() + "\u2026";
+    } else {
+      st.className = "hs-status " + (d.result && d.result.ok ? "ok" : d.result ? "bad" : "");
+      st.textContent = d.result ? String(d.result.message).toUpperCase() : "HOTSPOT OFF";
+      $("hs-qr").innerHTML = '<div class="none">' + (d.result && d.result.ok ? "&#10003;" : "Off") + "</div>"; hsQrFor = "";
+      if (hsOpen) setTimeout(hsClose, d.result && d.result.ok ? 5000 : 8000);
+      clearInterval(hsTimer); hsTimer = null;
+    }
+  }
+  function hsPoll() {
+    fetch("/api/wifi/hotspot", { cache: "no-store" }).then(function (r) { return r.json(); }).then(hsRender).catch(function () {});
+  }
+  function hsShow() {
+    hsOpen = true; $("hspot").className = "hspot show";
+    clearInterval(hsTimer); hsTimer = setInterval(hsPoll, 2000);
+  }
+  function hsClose() { hsOpen = false; $("hspot").className = "hspot"; clearInterval(hsTimer); hsTimer = null; }
+  function hsStart() {
+    if (MIRROR) return;
+    hsShow();
+    $("hs-status").className = "hs-status"; $("hs-status").textContent = "SCANNING NETWORKS, THEN STARTING THE HOTSPOT\u2026";
+    $("hs-qr").innerHTML = '<div class="none">Starting&hellip;</div>'; hsQrFor = "";
+    fetch("/api/wifi/hotspot", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "start" }) })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (d.ok) hsRender(d);
+        else { $("hs-status").className = "hs-status bad"; $("hs-status").textContent = String(d.error || "Couldn't start the hotspot").toUpperCase(); }
+      }).catch(function () {});
+  }
+  $("wifi-phone").addEventListener("click", function () { $("wifi-panel").className = "wifi-panel"; clearInterval(wifiTimer); hsStart(); });
+  $("kl-wifi").addEventListener("click", hsStart);
+  $("hs-stop").addEventListener("click", function () {
+    fetch("/api/wifi/hotspot", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "stop" }) }).then(function () { hsClose(); poll(); }, hsClose);
   });
 
   // ---------- Pi screen lock
@@ -1184,6 +1284,7 @@
   function apply(data) {
     if (data.build && BUILD && data.build !== BUILD) { location.reload(); return; }   // Aliana was updated
     if (data.pairing !== undefined) renderPairing(data.pairing);
+    if (data.hotspot && data.hotspot.active && !hsOpen && !MIRROR) hsShow();
     if (data.lock) {
       lockCfg = data.lock;
       $("clock").classList.toggle("lockable", !!(lockCfg.enabled && !MIRROR));
