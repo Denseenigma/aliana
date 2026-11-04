@@ -342,6 +342,22 @@
   </section>
 
   <section class="panel">
+    <div class="panel-head"><h2>Passive discovery</h2><span class="kv" id="pv-kv"></span></div>
+    <p class="desc">Aliana <b>listens</b> (it never sends anything) to what devices announce on the network: the
+      <b>hostname</b> and OS hints in their DHCP requests, ARP, mDNS / Bonjour, UPnP and NetBIOS announcements, and
+      the switch's <b>LLDP</b> (switch, port, VLAN). This names devices even where reverse DNS can't, and finds quiet
+      devices between scans. It hears what's on the Pi's own network segment (Wi-Fi or a switch port); over just the
+      USB-C link it only hears the laptop.</p>
+    <div class="opts" id="pv-opts">
+      <button type="button" class="opt off" data-pv="0">Off</button>
+      <button type="button" class="opt" data-pv="1">On</button>
+    </div>
+    <div class="readout" id="pv-readout"></div>
+    <div class="readout" id="pv-net" style="margin-top:6px"></div>
+    <div class="hint" id="pv-err" style="color:var(--red)"></div>
+  </section>
+
+  <section class="panel">
     <div class="panel-head"><h2>Never-probe ports</h2></div>
     <p class="desc">Ports that are still <b>reported as open</b> but never get service-identification probes.
       Use this for devices that accept a connection and then go silent (e.g. door-access controllers on
@@ -496,8 +512,38 @@
       (v.updated ? " &middot; updated <b>" + esc(v.updated) + "</b>" : "");
   }
 
+  function renderPassive() {
+    document.querySelectorAll("#pv-opts .opt").forEach(function (b) {
+      var on = b.getAttribute("data-pv") === "1";
+      b.className = "opt" + (on ? "" : " off") + ((on === !!S.passive) ? " on" : "");
+    });
+    var st = S.passive_status || {}, net = st.network || {}, k = st.by_kind || {};
+    $("pv-kv").innerHTML = !S.passive ? "Off" : st.running ? '<b style="color:var(--green)">Listening</b>' : st.error ? '<b style="color:var(--red)">Not running</b>' : "Starting\u2026";
+    $("pv-err").textContent = S.passive && st.error ? st.error : "";
+    $("pv-readout").innerHTML = "Devices heard <b>" + (st.devices || 0) + "</b> &middot; last hour <b>" + (st.last_hour || 0) +
+      "</b> &middot; names from DHCP <b>" + (st.dhcp_names || 0) + "</b>" +
+      (st.parsed ? " &middot; announcements <b>" + st.parsed.toLocaleString() + "</b> <span class=\"muted\">(" +
+        Object.keys(k).map(function (x) { return esc(x.toUpperCase()) + " " + k[x]; }).join(", ") + ")</span>" : "");
+    var parts = [], d = net.dhcp;
+    if (d) parts.push("DHCP server <b>" + esc(d.server || "?") + "</b>" + (d.router ? " &middot; router <b>" + esc(d.router) + "</b>" : "") +
+      (d.dns ? " &middot; DNS <b>" + esc(d.dns.join(", ")) + "</b>" : "") + (d.domain ? " &middot; domain <b>" + esc(d.domain) + "</b>" : ""));
+    Object.keys(net.lldp || {}).forEach(function (ifc) {
+      var l = net.lldp[ifc];
+      parts.push(esc(ifc) + ": switch <b>" + esc(l.system_name || l.switch_mac) + "</b>" + (l.port_id || l.port_desc ? " port <b>" + esc(l.port_desc || l.port_id) + "</b>" : "") +
+        (l.vlan ? " &middot; VLAN <b>" + l.vlan + "</b>" : ""));
+    });
+    $("pv-net").innerHTML = parts.join("<br>");
+  }
+  function loadPassive() {
+    fetch("/api/passive?limit=0", { cache: "no-store" }).then(function (r) { return r.json(); }).then(function (d) {
+      S.passive = d.enabled; S.passive_status = d.status; renderPassive();
+    }).catch(function () {});
+  }
+  setInterval(loadPassive, 10000);
+
   function render() {
     renderIdent();
+    renderPassive();
     renderSafety();
     $("prof").textContent = S.profile_label;
     var opts = [{ v: "off", label: "Off", on: !S.auto_scan }].concat(S.intervals.map(function (iv) {
@@ -536,6 +582,8 @@
       save({ no_probe_ports: S.no_probe_default });
     } else if (b.hasAttribute("data-id")) {
       save({ identify: b.getAttribute("data-id") === "1" });
+    } else if (b.hasAttribute("data-pv")) {
+      save({ passive: b.getAttribute("data-pv") === "1" }).then(function () { setTimeout(loadPassive, 1200); });
     } else if (b.id === "vdb-update") {
       b.disabled = true; b.textContent = "Updating\u2026";
       fetch("/api/vendor-db/update", { method: "POST" }).then(function (r) { return r.json(); }).then(function (d) {

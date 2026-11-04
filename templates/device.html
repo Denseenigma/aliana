@@ -33,7 +33,7 @@
   .who .mac { font-family: var(--mono); color: var(--text); letter-spacing: 0; }
   .who .sub { color: var(--muted); font-size: 0.85rem; letter-spacing: 0.05em; margin-top: 4px; }
   .state { font-family: var(--title); font-size: 1.2rem; text-transform: uppercase; margin-left: auto; }
-  .state.on { color: var(--green); } .state.off { color: var(--muted); }
+  .state.on { color: var(--green); } .state.off { color: var(--muted); } .state.heard { color: var(--cyan); }
   dl { display: grid; grid-template-columns: 150px 1fr; gap: 7px 14px; margin: 0; font-size: 0.9rem; }
   dt { color: var(--muted); font-size: 0.72rem; letter-spacing: 0.12em; text-transform: uppercase; padding-top: 3px; }
   dd { margin: 0; color: var(--text); }
@@ -93,18 +93,19 @@
         <div class="name">{{ d.hostname or d.vendor or 'Unknown device' }}</div>
         <div class="sub"><span class="mac">{{ d.mac }}</span>{% if d.vendor %} &middot; {{ d.vendor }}{% endif %}</div>
       </div>
-      <span class="state {{ 'on' if d.present else 'off' }}">{{ 'Online' if d.present else 'Not seen lately' }}</span>
+      <span class="state {{ 'on' if d.present else 'heard' if d.heard and d.heard.recent else 'off' }}" title="{{ 'In the latest scan of its network' if d.present else 'Heard on the network in the last hour (passive discovery)' if d.heard and d.heard.recent else '' }}">{{ 'Online' if d.present else 'Heard lately' if d.heard and d.heard.recent else 'Not seen lately' }}</span>
     </div>
     <dl>
       <dt>Type</dt><dd>{{ d.device.label }} <span class="muted2">&middot; {{ d.device.confidence }} confidence</span></dd>
       {% if d.device.model %}<dt>Model</dt><dd>{{ d.device.model }}</dd>{% endif %}
-      <dt>Last IP</dt><dd class="mono">{{ d.ip }}</dd>
+      <dt>Last IP</dt><dd class="mono">{{ d.ip or '–' }}</dd>
       {% if d.ips | length > 1 %}<dt>IPs seen</dt><dd class="mono">{{ d.ips | join(', ') }}</dd>{% endif %}
       {% if d.hostnames %}<dt>Names seen</dt><dd>{{ d.hostnames | join(', ') }}</dd>{% endif %}
       <dt>Networks</dt><dd class="mono">{{ d.networks | join(', ') or '–' }}</dd>
       <dt>First seen</dt><dd>{{ d.first_seen | when }} <span class="muted2">({{ d.first_seen | ago }})</span></dd>
       <dt>Last seen</dt><dd>{{ d.last_seen | when }} <span class="muted2">({{ d.last_seen | ago }})</span></dd>
-      <dt>Times seen</dt><dd>{{ d.sightings }}</dd>
+      <dt>Times seen</dt><dd>{{ d.sightings }}{% if d.heard_only %} <span class="muted2">&middot; never scanned</span>{% endif %}</dd>
+      {% if d.heard %}<dt>Heard on network</dt><dd>{{ d.heard.last | when }} <span class="muted2">({{ d.heard.last | ago }}) &middot; {{ d.heard.kinds | join(', ') }} &middot; first heard {{ d.heard.first | when }}</span></dd>{% endif %}
       {% if d.os_name %}<dt>OS guess</dt><dd>{{ d.os_name }}</dd>{% endif %}
       <dt>Open ports</dt><dd class="mono">{% for p, pr in d.open_ports %}{{ p }}/{{ pr }}{{ ', ' if not loop.last }}{% else %}<span class="muted2">none recorded</span>{% endfor %}</dd>
       {% if d.flags %}<dt>Flags</dt><dd>{% for f in d.flags %}<span class="flag {{ f.level }}" title="{{ f.detail }}">{{ f.label }}</span>{% endfor %}</dd>{% endif %}
@@ -134,6 +135,8 @@
       {% if idn.netbios %}<span class="k">NetBIOS</span><span class="v">{{ idn.netbios.name }}{% if idn.netbios.group %} &middot; {{ idn.netbios.group }}{% endif %}{% if idn.netbios.server %} &middot; file sharing{% endif %}</span>{% endif %}
       {% if idn.mdns %}<span class="k">mDNS</span><span class="v">{{ idn.mdns.name or '' }}{% if idn.mdns.instances %} &middot; “{{ idn.mdns.instances | join('”, “') }}”{% endif %}{% if idn.mdns.services %}<br><span class="muted2">{{ idn.mdns.services | join(' ') }}</span>{% endif %}{% if idn.mdns.txt %}<br><span class="muted2">{% for k, v in idn.mdns.txt.items() %}{{ k }}={{ v }} {% endfor %}</span>{% endif %}</span>{% endif %}
       {% if idn.upnp %}<span class="k">UPnP</span><span class="v">{{ [idn.upnp.name, idn.upnp.manufacturer, idn.upnp.model, idn.upnp.model_number] | select | join(' · ') }}{% if idn.upnp.device_type %}<br><span class="muted2">{{ idn.upnp.device_type }}</span>{% endif %}{% if idn.upnp.server %}<br><span class="muted2">{{ idn.upnp.server }}</span>{% endif %}</span>{% endif %}
+      {% set pdh = (idn.passive or {}).get('dhcp') %}
+      {% if pdh %}<span class="k">DHCP</span><span class="v">{{ [pdh.hostname, pdh.fqdn, pdh.vendor_class] | select | join(' · ') or 'no name given' }}{% if pdh.params %}<br><span class="muted2">asked for options {{ pdh.params }}</span>{% endif %}<br><span class="muted2">heard {{ pdh.at | when }}{% if pdh.msg %} &middot; {{ pdh.msg }}{% endif %} (passive)</span></span>{% endif %}
       {% if idn.names and idn.names.dns %}<span class="k">DNS</span><span class="v">{{ idn.names.dns }}</span>{% endif %}
       {% for p, h in (idn.http or {}).items() %}<span class="k">Web :{{ p }}</span><span class="v">{{ [h.title, h.server, h.realm and ('realm ' ~ h.realm), h.cert_cn and ('cert ' ~ h.cert_cn), h.cert_org] | select | join(' · ') }}</span>{% endfor %}
       {% if idn.private_mac %}<span class="k">MAC</span><span class="v">Private / randomized &mdash; the device hides its real MAC (common on phones, tablets and laptops). It's usually stable per Wi-Fi network, so history still works.</span>{% endif %}
@@ -144,6 +147,8 @@
   <section class="panel">
     <div class="panel-head"><h2>Timeline</h2><span class="kv">{{ timeline | length }} sighting{{ 's' if timeline | length != 1 }}</span></div>
     <div class="tl">
+      {% if not timeline %}<p class="muted2">Never scanned &mdash; Aliana has only heard this device announce itself on the network.
+        {% if d.ip %}Run a scan of its network (or a host scan of {{ d.ip }}) to see its ports.{% endif %}</p>{% endif %}
       {% for e in timeline %}
       <div class="ev {{ 'chg' if e.opened or e.closed or e.ip_changed else '' }}">
         <div class="top">

@@ -10,6 +10,9 @@ Environment=ALIANA_IFACE=usb0
 Environment=ALIANA_SCAN_INTERVAL=300
 # Automatic scans start OFF; switch them on from the dashboard / Pi screen
 Environment=ALIANA_AUTO_SCAN=0
+# Passive discovery (passive.py) listens for DHCP/ARP/mDNS announcements:
+# needs raw sockets. Listen-only; nothing is sent.
+AmbientCapabilities=CAP_NET_RAW
 ExecStart=/home/admin/aliana/venv/bin/python3 /home/admin/aliana/app.py
 Restart=on-failure
 RestartSec=5

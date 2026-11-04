@@ -206,6 +206,45 @@ def _port_clues(ports):
     return c
 
 
+_DHCP_VENDORS = [   # (type, score, regex on the DHCP vendor class, label)
+    ("windows", 84, _re.compile(r"^msft", _re.I), "Windows"),
+    ("mobile", 88, _re.compile(r"^android-dhcp-?(\d*)", _re.I), "Android"),
+    ("pi", 86, _re.compile(r"^dhcpcd.*(rpi|bcm27|bcm2835|bcm2711|raspberry)", _re.I), "Raspberry Pi"),
+    ("linux", 70, _re.compile(r"^dhcpcd|^dhclient|systemd", _re.I), "Linux"),
+    ("phone", 88, _re.compile(r"yealink|polycom|mitel|grandstream|avaya|snom|cisco.*phone|ip ?phone", _re.I), "IP phone"),
+    ("printer", 85, _re.compile(r"jetdirect|hewlett|brother|epson|canon|lexmark|xerox|ricoh|kyocera|konica|sharp", _re.I), "printer"),
+    ("camera", 85, _re.compile(r"axis|hikvision|dahua|hanwha|vivotek|reolink", _re.I), "camera"),
+    ("network", 78, _re.compile(r"ubnt|ubiquiti|aruba|meraki|fortinet|cisco|juniper|mikrotik|tp-?link|netgear", _re.I), "network device"),
+    ("iot", 55, _re.compile(r"^udhcp", _re.I), "embedded Linux"),
+    ("pc", 45, _re.compile(r"^pxeclient", _re.I), "network boot"),
+]
+
+
+def _dhcp_clues(dh, host, ident):
+    """Clues from the DHCP request a device broadcast (passive.py)."""
+    if not dh:
+        return []
+    out = []
+    vc = dh.get("vendor_class") or ""
+    for t, sc, rx, label in _DHCP_VENDORS:
+        m = rx.search(vc)
+        if m:
+            extra = f" {m.group(1)}" if label == "Android" and m.lastindex and m.group(1) else ""
+            out.append((t, sc, f"DHCP: {label}{extra} (“{vc[:40]}”)"))
+            break
+    params = [p for p in (dh.get("params") or "").split(",") if p]
+    if params and not vc:
+        ps = set(params)
+        private = ident.get("private_mac") or (host.get("mac") and _identify.is_private_mac(host["mac"]))
+        if params[:2] == ["1", "121"] and {"108", "114"} & ps or params[:4] == ["1", "121", "3", "6"]:
+            out.append(("mobile" if private else "apple", 80, "DHCP fingerprint: Apple (iOS / macOS)"))
+        elif {"249", "252", "43"} <= ps:
+            out.append(("windows", 72, "DHCP fingerprint: Windows"))
+        elif {"26", "28", "51", "58", "59"} <= ps:
+            out.append(("linux", 50, "DHCP fingerprint: Linux / Android"))
+    return out
+
+
 def _model_from(ident, host):
     """Best product / model string we have."""
     up = ident.get("upnp") or {}
@@ -227,7 +266,7 @@ def classify_host(host):
     a best guess at what the device is, from every clue available."""
     ident = host.get("ident") or {}
     vendor = (host.get("vendor") or ident.get("vendor_db") or "").lower()
-    if not vendor and host.get("mac"):
+    if not vendor and host.get("mac") and not _identify.is_private_mac(host["mac"]):
         vendor = (_identify.vendor_for(host["mac"]) or "").lower()
     ports = {p["port"] for p in host.get("ports", []) if p.get("state") == "open"}
     services_txt = " ".join((p.get("service") or "") + " " + (p.get("product") or "")
@@ -245,6 +284,8 @@ def classify_host(host):
         clues.append((score, t, why))
 
     # -- strongest: what the device says about itself
+    for t, sc, why in _dhcp_clues((ident.get("passive") or {}).get("dhcp") or {}, host, ident):
+        add(t, sc, why)
     if ident.get("gateway"):
         add("network", 96, "default gateway")
     svcs = " ".join(md.get("services") or []) + " "
@@ -532,7 +573,12 @@ def annotate(scan):
     counts = {"high": 0, "medium": 0, "low": 0}
     rmm_counts = {"managed": 0, "missing": 0, "na": 0}
     rmm_on = False
+    import passive
     for h in scan.get("hosts", []):
+        if h.get("mac"):   # + what the device announced since (passive discovery)
+            h["ident"] = passive.merge_into(h.get("ident") or {}, h["mac"])
+            if not h.get("hostname") and h["ident"].get("name"):
+                h["hostname"] = h["ident"]["name"]
         h["device"] = classify_host(h)
         h["flags"] = host_flags(h)
         h["rmm"] = rmm_check(h, h["device"]["type"])

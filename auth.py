@@ -384,7 +384,8 @@ def erase_sensitive(db_path, vault_key_path):
 
     Erased: RMM provider/credentials/status and the synced RMM device list,
             the vault encryption key, all scans / hosts / ports / jobs
-            (scan history, device inventory, identification results).
+            (scan history, device inventory, identification results) and
+            everything heard by passive discovery.
     Kept:   settings (profile, auto-scan, intervals, exclusions, never-probe
             ports, identification on/off), the vendor database, Wi-Fi."""
     with _lock:
@@ -392,7 +393,7 @@ def erase_sensitive(db_path, vault_key_path):
             conn = sqlite3.connect(db_path)
             try:
                 tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-                for t in ("ports", "hosts", "scans", "jobs", "rmm_devices"):
+                for t in ("ports", "hosts", "scans", "jobs", "rmm_devices", "passive_devices", "passive_network"):
                     if t in tables:
                         conn.execute(f"DELETE FROM {t}")
                 if "settings" in tables:

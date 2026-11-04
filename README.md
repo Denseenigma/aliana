@@ -14,6 +14,7 @@ aliana/
   wifi.py              Wi-Fi management via NetworkManager (nmcli)
   qr.py                tiny built-in QR code generator (no dependencies)
   auth.py              access control: authenticator-app sign-in, recovery codes, erase & reset
+  passive.py           passive discovery: listens for DHCP / ARP / mDNS / SSDP / NetBIOS / LLDP
   requirements.txt
   aliana.service       systemd unit (expects the repo cloned at ~/aliana)
   setup.sh             one-time/after-pull install steps (Pi only)
@@ -133,6 +134,32 @@ every scan; changes save immediately:
 - **Never-probe ports** -- add/remove ports or ranges that are reported as
   open but never get service-identification probes (default `9999`;
   `ALIANA_NO_PROBE_PORTS` sets the default for a fresh install).
+
+## Passive discovery (listening only)
+
+Alongside scans, Aliana **listens** to what devices announce about themselves
+and never sends anything (`passive.py`):
+
+- **DHCP** requests: the device's own **hostname** (even on networks whose DNS
+  can't do reverse lookups), its vendor class (`MSFT 5.0` = Windows,
+  `android-dhcp-14` = Android 14, Yealink / HP / Axis...), and the options it
+  asks for, which fingerprint iPhones and Macs. DHCP replies show the DHCP
+  server, router, DNS servers and domain.
+- **ARP**: every device that talks, with its IP -- including quiet ones that
+  ignore scans.
+- **mDNS / Bonjour**, **UPnP NOTIFY** and **NetBIOS** announcements.
+- **LLDP** from the switch: switch name, port and VLAN (Settings shows them).
+
+Heard devices get a **DHCP** chip on the dashboard and feed the device-type
+guess; devices heard but never scanned show on the Devices page as
+**Heard** (filter: *Never scanned*). The dashboard header shows how many were
+heard in the last hour. Turn it off in Settings > Passive discovery.
+
+It hears the Pi's own network segment: on Wi-Fi or a switch port it hears the
+whole LAN's broadcasts; over only the USB-C gadget link it hears just the
+laptop. It needs raw sockets, so `aliana.service` grants the service
+`CAP_NET_RAW` -- **run `bash setup.sh` once after pulling** this change. Data
+is flushed to `aliana.db` every 30 s and is erased by Erase & reset.
 
 ## Device identification
 

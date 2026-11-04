@@ -16,6 +16,8 @@ can't be tracked across scans and are only counted.
 """
 import datetime
 import hashlib
+import json
+import time
 import ipaddress
 import re
 import socket
@@ -24,6 +26,7 @@ import uuid
 
 import identify
 import scanner
+import passive
 
 FORMAT = "aliana-history"
 VERSION = 1
@@ -254,6 +257,8 @@ def _summarise(mac, rows, latest_times):
     latest_ports = port_rows[-1]["ports"] if port_rows else []
     ident = next((r["ident"] for r in reversed(rows) if r.get("ident") and r["ident"].get("sources")), None) \
         or next((r["ident"] for r in reversed(rows) if r.get("ident")), {})
+    ident = passive.merge_into(json.loads(json.dumps(ident or {})), mac)   # + heard on the network
+    heard = passive.lookup(mac)
     vendor = next((r["vendor"] for r in reversed(rows) if r["vendor"]), None) or ident.get("vendor_db") \
         or identify.vendor_for(mac)
     hostname = next((r["hostname"] for r in reversed(rows) if r["hostname"]), None) or ident.get("name")
@@ -265,6 +270,12 @@ def _summarise(mac, rows, latest_times):
             hostnames[r["hostname"]] = r["finished_at"]
         if r["scope"] != "host":
             networks.add(r["subnet"])
+    if heard:
+        for ip, at in (heard["info"].get("ips") or {}).items():
+            ips[ip] = max(ips.get(ip) or "", at)
+        n, _ = passive.best_name(heard["info"])
+        if n:
+            hostnames[n] = max(hostnames.get(n) or "", heard["last_seen"])
     host_like = {"mac": mac, "ip": last["ip"], "vendor": vendor, "hostname": hostname, "ports": latest_ports,
                  "ident": ident,
                  "os_name": os_row["os_name"] if os_row else None,
@@ -282,12 +293,49 @@ def _summarise(mac, rows, latest_times):
         "last_seen": last["finished_at"],
         "sightings": len({r["scan_id"] for r in rows}),
         "present": present,
+        "heard": _heard_view(heard),
+        "heard_only": False,
         "open_ports": sorted({(p["port"], p["protocol"]) for p in latest_ports if p["state"] == "open"}),
         "os_name": host_like["os_name"],
         "ident": ident,
         "device": insights.classify_host(host_like),
         "flags": insights.host_flags(host_like),
         "_host": host_like,
+    }
+
+
+def _heard_view(rec):
+    """Passive-discovery summary for templates: last heard, recently, what."""
+    if not rec:
+        return None
+    info = rec["info"]
+    return {"first": rec["first_seen"], "last": rec["last_seen"], "recent": _ts(rec["last_seen"]) >= time.time() - 3600,
+            "ip": rec["ip"], "iface": rec["iface"],
+            "kinds": [k.upper() if k != "netbios" else "NetBIOS" for k in ("dhcp", "arp", "mdns", "ssdp", "netbios") if k in info],
+            "dhcp": info.get("dhcp"), "ips": info.get("ips") or {}}
+
+
+def _heard_only(rec):
+    """A device Aliana has heard announce itself but never scanned."""
+    import insights
+    mac = rec["mac"]
+    ident = {"names": {}, "sources": []}
+    private = identify.is_private_mac(mac)
+    v = None if private else identify.vendor_for(mac)   # a random MAC's "vendor" is meaningless
+    if v:
+        ident["vendor_db"] = v
+    if private:
+        ident["private_mac"] = True
+    passive.merge_into(ident, mac)
+    host_like = {"mac": mac, "ip": rec["ip"], "vendor": v, "hostname": ident.get("name"), "ports": [],
+                 "ident": ident, "os_name": None, "os_type": None}
+    ips = rec["info"].get("ips") or {}
+    return {
+        "mac": mac, "vendor": v, "hostname": ident.get("name"), "ip": rec["ip"],
+        "ips": sorted(ips, key=ips.get, reverse=True), "hostnames": [ident["name"]] if ident.get("name") else [],
+        "networks": [], "first_seen": rec["first_seen"], "last_seen": rec["last_seen"], "sightings": 0,
+        "present": False, "heard": _heard_view(rec), "heard_only": True, "open_ports": [], "os_name": None,
+        "ident": ident, "device": insights.classify_host(host_like), "flags": [], "_host": host_like,
     }
 
 
@@ -300,6 +348,7 @@ def list_devices():
         by_mac.setdefault(r["mac"], []).append(r)
     latest = _latest_network_times()
     devices = [_summarise(m, rs, latest) for m, rs in by_mac.items()]
+    devices += [_heard_only(r) for r in passive.heard_devices() if r["mac"] not in by_mac]
     devices.sort(key=lambda d: (not d["present"], d["last_seen"] and -_ts(d["last_seen"]), _ipkey(d["ip"])))
     conn = _db()
     no_mac = conn.execute("SELECT COUNT(DISTINCT ip) FROM hosts WHERE mac IS NULL").fetchone()[0]
@@ -325,7 +374,8 @@ def device_history(mac):
         return None
     rows = _sightings(mac)
     if not rows:
-        return None
+        rec = passive.lookup(mac)
+        return {"device": _heard_only(rec), "timeline": []} if rec else None
     summary = _summarise(mac, rows, _latest_network_times())
     timeline, prev = [], None
     for r in rows:

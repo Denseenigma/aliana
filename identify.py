@@ -546,7 +546,7 @@ def default_gateway():
 
 def _best_name(ident):
     """The most human name we found, and where it came from."""
-    for key, src in (("netbios", "NetBIOS"), ("mdns_instance", "mDNS"), ("mdns", "mDNS"),
+    for key, src in (("netbios", "NetBIOS"), ("dhcp", "DHCP"), ("mdns_instance", "mDNS"), ("mdns", "mDNS"),
                      ("upnp", "UPnP"), ("dns", "DNS")):
         v = ident.get("names", {}).get(key)
         if v:
@@ -578,6 +578,15 @@ def identify_host(host, gateway=None, servers=(), no_probe=(), upnp=None, stop=N
     if gateway and ip == gateway:
         ident["gateway"] = True
     if stop is not None and stop.is_set():
+        if mac:
+            try:
+                import passive
+                passive.merge_into(ident, mac)
+                n, src = _best_name(ident)
+                if n:
+                    ident["name"], ident["name_source"] = n, src
+            except Exception:
+                pass
         return ident
 
     nb = netbios(ip)
@@ -614,6 +623,12 @@ def identify_host(host, gateway=None, servers=(), no_probe=(), upnp=None, stop=N
     if web:
         ident["http"] = web
         ident["sources"].append("http")
+    if mac:   # what the device announced on its own (passive.py) fills the gaps
+        try:
+            import passive
+            passive.merge_into(ident, mac)
+        except Exception:
+            pass
     name, src = _best_name(ident)
     if name:
         ident["name"], ident["name_source"] = name, src

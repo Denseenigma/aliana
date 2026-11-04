@@ -23,6 +23,7 @@ import wifi
 import qr
 import auth
 import vault
+import passive
 
 PORT = 8080
 
@@ -45,6 +46,23 @@ def when(iso):
     if t.date() == datetime.date.today():
         return t.strftime("%H:%M")
     return f"{t.strftime('%b')} {t.day} \u00b7 {t.strftime('%H:%M')}"
+
+
+@app.context_processor
+def _passive_ctx():
+    def passive_status():
+        st = passive.status()
+        st["enabled"] = passive.enabled()
+        try:   # heard but never in a scan
+            import sqlite3 as _sq
+            conn = _sq.connect(scanner.DB_PATH)
+            scanned = {r[0] for r in conn.execute("SELECT DISTINCT UPPER(mac) FROM hosts WHERE mac IS NOT NULL")}
+            conn.close()
+            st["never_scanned"] = sum(1 for r in passive.heard_devices() if r["mac"] not in scanned)
+        except Exception:
+            st["never_scanned"] = 0
+        return st
+    return {"passive_status": passive_status}
 
 
 @app.template_filter("ago")
@@ -241,6 +259,7 @@ def api_auth_reset_cancel():
 def _erase_everything_sensitive():
     scanner.cancel_all_queued()
     scanner.stop_scan(wait=10)
+    passive.forget_all()     # first, so the listener can't write it back
     auth.erase_sensitive(scanner.DB_PATH, vault.key_path())
     rmm.forget_runtime_state()
 
@@ -646,7 +665,9 @@ def devices_page():
     devs = [_device_view(d) for d in data["devices"]]
     counts = {"total": len(devs), "present": sum(1 for d in devs if d["present"]),
               "managed": sum(1 for d in devs if d["rmm"] and d["rmm"]["status"] == "managed"),
-              "missing": sum(1 for d in devs if d["rmm"] and d["rmm"]["status"] == "missing")}
+              "missing": sum(1 for d in devs if d["rmm"] and d["rmm"]["status"] == "missing"),
+              "heard_only": sum(1 for d in devs if d.get("heard_only")),
+              "heard_recent": sum(1 for d in devs if d.get("heard") and d["heard"]["recent"])}
     return render_template("devices.html", devices=devs, counts=counts, untracked=data["untracked_ips"],
                            span=data["scans"], status=scanner.get_status(), rmm_state=rmm.public_state())
 
@@ -742,6 +763,8 @@ def _settings_state():
         "mode": scanner.scan_mode(),
         "exclusions": scanner.get_exclusions(),
         "identify": scanner.get_identify_enabled(),
+        "passive": passive.enabled(),
+        "passive_status": passive.status(),
         "vendor_db": identify.oui_info(),
         "guard": _safe_guard(),
         "interface": scanner.get_current_interface(),
@@ -796,6 +819,8 @@ def api_settings():
             scanner.set_no_probe_ports(items)
         if "identify" in data:
             scanner.set_identify_enabled(bool(data["identify"]))
+        if "passive" in data:
+            passive.set_enabled(bool(data["passive"]))
         if "exclusions" in data:
             try:
                 scanner.set_exclusions(data["exclusions"])
@@ -1009,6 +1034,21 @@ def api_wifi_qr():
     return Response(qr.svg(url), mimetype="image/svg+xml", headers={"Cache-Control": "no-store"})
 
 
+@app.route("/api/passive")
+def api_passive():
+    """Passive discovery: listener status, what the network told us, and
+    the devices heard most recently."""
+    devs = sorted(passive.heard_devices(), key=lambda r: r["last_seen"] or "", reverse=True)
+    out = []
+    for r in devs[:int(request.args.get("limit", 50))]:
+        n, src = passive.best_name(r["info"])
+        out.append({"mac": r["mac"], "ip": r["ip"], "name": n, "name_source": src, "last_seen": r["last_seen"],
+                    "first_seen": r["first_seen"], "iface": r["iface"],
+                    "kinds": [k for k in ("dhcp", "arp", "mdns", "ssdp", "netbios") if k in r["info"]],
+                    "vendor": None if identify.is_private_mac(r["mac"]) else identify.vendor_for(r["mac"])})
+    return jsonify({"ok": True, "enabled": passive.enabled(), "status": passive.status(), "devices": out})
+
+
 @app.route("/api/interfaces")
 def api_interfaces():
     return jsonify(scanner.list_interfaces())
@@ -1038,6 +1078,9 @@ if __name__ == "__main__":
     scanner.init_db()
     rmm.init_db()
     scanner.on_job_done.append(rmm.maybe_sync_after)
+    passive.init_db()
+    if passive.enabled():
+        passive.start()   # listens only; needs CAP_NET_RAW (setup.sh)
     # The queue worker runs every scan, one at a time; the auto-scan loop
     # adds a network scan to the queue whenever one is due
     threading.Thread(target=scanner.queue_worker, daemon=True).start()

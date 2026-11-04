@@ -65,6 +65,9 @@
                padding: 6px 12px 5px; box-shadow: inset 0 0 0 1px var(--accent); }
   .exports a:hover { background: var(--accent); color: #000; }
   .wide { overflow-x: auto; }
+  .pres.heard { background: var(--cyan); box-shadow: 0 0 5px var(--cyan); }
+  .heardtag { font-size: 0.62rem; letter-spacing: 0.12em; text-transform: uppercase; padding: 1px 5px 0; vertical-align: middle;
+              color: var(--cyan); box-shadow: inset 0 0 0 1px var(--cyan); }
 </style>
 </head>
 <body>
@@ -94,6 +97,7 @@
   <div class="stat"><span class="label">Devices</span><div class="num">{{ counts.total }}</div></div>
   <div class="stat ok"><span class="label">In latest scan</span><div class="num">{{ counts.present }}</div></div>
   <div class="stat"><span class="label">Not seen lately</span><div class="num">{{ counts.total - counts.present }}</div></div>
+  {% if counts.heard_only or counts.heard_recent %}<div class="stat"><span class="label" title="Heard announcing itself on the network but never in a scan">Heard, never scanned</span><div class="num" style="color:var(--cyan)">{{ counts.heard_only }}</div></div>{% endif %}
   {% if rmm_state.provider %}
   <div class="stat ok"><span class="label">In {{ rmm_state.label }}</span><div class="num">{{ counts.managed }}</div></div>
   <div class="stat {{ 'bad' if counts.missing else '' }}"><span class="label">No RMM agent</span><div class="num">{{ counts.missing }}</div></div>
@@ -111,6 +115,8 @@
       <button type="button" class="chipf on" data-f="all">All</button>
       <button type="button" class="chipf" data-f="present">In latest scan</button>
       <button type="button" class="chipf" data-f="gone">Not seen lately</button>
+      <button type="button" class="chipf" data-f="heard" title="Heard on the network in the last hour (passive discovery)">Heard lately</button>
+      <button type="button" class="chipf" data-f="heardonly" title="Heard announcing itself but never in a scan">Never scanned</button>
       {% if rmm_state.provider %}<button type="button" class="chipf" data-f="missing">No RMM agent</button>{% endif %}
       <button type="button" class="chipf" data-f="flagged">Flagged</button>
     </div>
@@ -121,13 +127,13 @@
       {% for d in devices %}
       <tr class="{{ '' if d.present else 'gone' }}"
           data-present="{{ 1 if d.present else 0 }}" data-missing="{{ 1 if d.rmm and d.rmm.status == 'missing' else 0 }}"
-          data-flagged="{{ 1 if d.flags else 0 }}"
+          data-flagged="{{ 1 if d.flags else 0 }}" data-heard="{{ 1 if d.heard and d.heard.recent else 0 }}" data-heardonly="{{ 1 if d.heard_only else 0 }}"
           data-text="{{ [d.mac, d.vendor, d.hostname, d.device.label] | select | join(' ') | lower }} {{ d.ips | join(' ') }} {{ d.hostnames | join(' ') | lower }}">
         <td><span class="hexb t-{{ d.device.type }} c-{{ d.device.confidence }}" title="{{ d.device.label }} ({{ d.device.confidence }} confidence) -- {{ d.device.why }}">{{ d.device.code }}</span></td>
-        <td><a href="{{ url_for('device_page', mac=d.mac) }}"><span class="pres {{ 'on' if d.present else '' }}" title="{{ 'In the latest scan of its network' if d.present else 'Not in the latest scan' }}"></span>{{ d.hostname or d.vendor or 'Unknown device' }}</a>
+        <td><a href="{{ url_for('device_page', mac=d.mac) }}"><span class="pres {{ 'on' if d.present else 'heard' if d.heard and d.heard.recent else '' }}" title="{{ 'In the latest scan of its network' if d.present else 'Heard on the network in the last hour' if d.heard and d.heard.recent else 'Not in the latest scan' }}"></span>{{ d.hostname or d.vendor or 'Unknown device' }}</a>{% if d.heard_only %} <span class="heardtag" title="Heard announcing itself on the network ({{ d.heard.kinds | join(', ') }}) but never in a scan">Heard</span>{% endif %}
           <span class="sm2"><span class="mac">{{ d.mac }}</span>{% if d.hostname and d.vendor %} &middot; {{ d.vendor }}{% endif %}{% if d.device.model %} &middot; {{ d.device.model }}{% endif %}{% if not d.hostname and not d.vendor %} &middot; {{ d.device.label }}{% endif %}</span></td>
-        <td><span class="ipc">{{ d.ip }}</span>{% if d.ips | length > 1 %}<span class="sm2">{{ d.ips | length }} IPs seen</span>{% endif %}</td>
-        <td>{{ d.last_seen | when }}<span class="sm2">first {{ d.first_seen | when }} &middot; {{ d.sightings }}&times;</span></td>
+        <td><span class="ipc">{{ d.ip or '–' }}</span>{% if d.ips | length > 1 %}<span class="sm2">{{ d.ips | length }} IPs seen</span>{% endif %}</td>
+        <td>{{ d.last_seen | when }}{% if d.heard_only %}<span class="sm2">heard only &middot; never scanned</span>{% else %}<span class="sm2">first {{ d.first_seen | when }} &middot; {{ d.sightings }}&times;{% if d.heard %} &middot; heard {{ d.heard.last | ago }}{% endif %}</span>{% endif %}</td>
         <td class="ports">{% for p, pr in d.open_ports[:8] %}{{ p }}{{ ', ' if not loop.last }}{% endfor %}{% if d.open_ports | length > 8 %} +{{ d.open_ports | length - 8 }}{% endif %}</td>
         {% if rmm_state.provider %}<td>{% if d.rmm %}<span class="rm {{ d.rmm.status }}">{{ {'managed': 'Managed', 'missing': 'Missing', 'na': 'No agent expected'}[d.rmm.status] }}</span>{% if d.rmm.device %}<span class="sm2">{{ d.rmm.device.site }}</span>{% endif %}{% else %}<span class="rm na">Not synced</span>{% endif %}</td>{% endif %}
         <td>{% for f in d.flags %}<span class="flag {{ f.level }}" title="{{ f.detail }}">{{ f.label }}</span>{% endfor %}</td>
@@ -188,7 +194,9 @@
         (filter === "all" || (filter === "present" && r.getAttribute("data-present") === "1") ||
          (filter === "gone" && r.getAttribute("data-present") === "0") ||
          (filter === "missing" && r.getAttribute("data-missing") === "1") ||
-         (filter === "flagged" && r.getAttribute("data-flagged") === "1"));
+         (filter === "flagged" && r.getAttribute("data-flagged") === "1") ||
+         (filter === "heard" && r.getAttribute("data-heard") === "1") ||
+         (filter === "heardonly" && r.getAttribute("data-heardonly") === "1"));
       r.style.display = ok ? "" : "none";
       if (ok) n++;
     });
