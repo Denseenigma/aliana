@@ -240,6 +240,15 @@
   .opt:hover { background: transparent; color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
   .opt.on { background: var(--green); color: #000; box-shadow: none; }
   .opt.off.on { background: var(--accent); }
+  table.hear { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+  table.hear td { padding: 4px 8px 4px 0; border-bottom: 1px solid rgba(255, 122, 0, 0.15); vertical-align: top; }
+  table.hear td.n { text-align: right; color: var(--text); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  table.hear td.l { color: var(--accent); letter-spacing: 0.08em; text-transform: uppercase; white-space: nowrap; }
+  table.hear td.d, table.hear td.t { color: var(--muted); }
+  table.hear tr.zero td.l, table.hear tr.zero td.n { color: var(--muted); opacity: 0.6; }
+  ul.hear-hints { margin: 8px 0 0; padding-left: 18px; color: var(--accent); font-size: 0.85rem; }
+  ul.hear-hints li { margin: 3px 0; }
+  @media (max-width: 640px) { table.hear td.d { display: none; } }
   .readout { margin-top: 14px; font-size: 0.85rem; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); }
   .readout b { color: var(--text); font-weight: inherit; }
   .readout b.ok { color: var(--green); }
@@ -350,17 +359,31 @@
 
   <section class="panel">
     <div class="panel-head"><h2>Passive discovery</h2><span class="kv" id="pv-kv"></span></div>
-    <p class="desc">Aliana <b>listens</b> (it never sends anything) to what devices announce on the network: the
-      <b>hostname</b> and OS hints in their DHCP requests, ARP, mDNS / Bonjour, UPnP and NetBIOS announcements, and
-      the switch's <b>LLDP</b> (switch, port, VLAN). This names devices even where reverse DNS can't, and finds quiet
-      devices between scans. It hears what's on the Pi's own network segment (Wi-Fi or a switch port); over just the
-      USB-C link it only hears the laptop.</p>
+    <p class="desc">Aliana <b>listens</b> to what devices announce on the network: the <b>hostname</b> and OS hints in
+      their DHCP and DHCPv6 requests, ARP, <b>IPv6</b> neighbor discovery, mDNS / Bonjour, UPnP and NetBIOS
+      announcements, and <b>LLDP / CDP</b> from switches, phones and access points (name, model, port, VLAN, voice
+      VLAN). This names devices even where reverse DNS can't, and finds quiet devices between scans. It hears what's
+      on the Pi's own network segment (Wi-Fi or a switch port); over just the USB-C link it only hears the laptop.</p>
     <div class="opts" id="pv-opts">
       <button type="button" class="opt off" data-pv="0">Off</button>
       <button type="button" class="opt" data-pv="1">On</button>
     </div>
+    <div class="kv" style="margin:12px 0 6px">Prompted announcements</div>
+    <div class="opts" id="pn-opts">
+      <button type="button" class="opt off" data-pn="0">Off</button>
+      <button type="button" class="opt" data-pn="1">On</button>
+      <button type="button" class="ghost sm" id="pn-now" style="margin-left:8px">Ask now</button>
+    </div>
+    <p class="hint">The one part of LISTEN that sends: every 10 minutes Aliana asks once, to the whole network,
+      &ldquo;who's out there?&rdquo; in mDNS, UPnP, WS-Discovery and an IPv6 all-nodes ping &mdash; the same handful of
+      packets phones and PCs send all day &mdash; and hears everyone's answers at once instead of waiting for devices to
+      speak up. Nothing is aimed at any one device. <span id="pn-readout"></span></p>
     <div class="readout" id="pv-readout"></div>
     <div class="readout" id="pv-net" style="margin-top:6px"></div>
+    <div class="kv" style="margin:14px 0 6px">What LISTEN is hearing</div>
+    <table class="hear" id="pv-hear"></table>
+    <div class="readout" id="pv-ifaces" style="margin-top:6px"></div>
+    <ul class="hear-hints" id="pv-hints"></ul>
     <div class="hint" id="pv-err" style="color:var(--red)"></div>
   </section>
 
@@ -547,10 +570,58 @@
       (d.dns ? " &middot; DNS <b>" + esc(d.dns.join(", ")) + "</b>" : "") + (d.domain ? " &middot; domain <b>" + esc(d.domain) + "</b>" : ""));
     Object.keys(net.lldp || {}).forEach(function (ifc) {
       var l = net.lldp[ifc];
-      parts.push(esc(ifc) + ": switch <b>" + esc(l.system_name || l.switch_mac) + "</b>" + (l.port_id || l.port_desc ? " port <b>" + esc(l.port_desc || l.port_id) + "</b>" : "") +
+      parts.push(esc(ifc) + ": " + ((l.caps || []).indexOf("phone") >= 0 ? "phone" : (l.caps || []).indexOf("access point") >= 0 ? "access point" : "switch") +
+        " <b>" + esc(l.system_name || l.switch_mac) + "</b>" + (l.port_id || l.port_desc ? " port <b>" + esc(l.port_desc || l.port_id) + "</b>" : "") +
         (l.vlan ? " &middot; VLAN <b>" + l.vlan + "</b>" : ""));
     });
+    ["cdp"].forEach(function (pr) {
+      Object.keys(net[pr] || {}).forEach(function (ifc) {
+        var l = net[pr][ifc];
+        parts.push(esc(ifc) + ": " + pr.toUpperCase() + " <b>" + esc(l.system_name || l.switch_mac) + "</b>" + (l.model ? " (" + esc(l.model) + ")" : "") +
+          (l.port_id ? " port <b>" + esc(l.port_id) + "</b>" : "") + (l.vlan ? " &middot; VLAN <b>" + l.vlan + "</b>" : ""));
+      });
+    });
+    var vv = {};
+    Object.keys(net.lldp || {}).concat(Object.keys(net.cdp || {})).forEach(function (ifc) {
+      var l = (net.lldp || {})[ifc], c = (net.cdp || {})[ifc];
+      if (l && l.voice_vlan == null) l = null;
+      l = l || c;
+      if (vv[ifc]) return;
+      vv[ifc] = 1;
+      if (l && l.voice_vlan != null) parts.push(esc(ifc) + ": voice VLAN <b>" + (l.voice_vlan || "untagged") + "</b>");
+    });
+    var rts = (net.ipv6 || {}).routers || {};
+    Object.keys(rts).forEach(function (m) {
+      var r = rts[m];
+      parts.push("IPv6 router <b>" + esc(r.ip) + "</b>" + (r.prefixes && r.prefixes.length ? " &middot; prefix <b>" + esc(r.prefixes.join(", ")) + "</b>" : "") +
+        (r.managed ? " &middot; DHCPv6" : r.other ? " &middot; DHCPv6 (DNS only)" : " &middot; SLAAC") + (r.dns && r.dns.length ? " &middot; DNS <b>" + esc(r.dns.join(", ")) + "</b>" : ""));
+    });
     $("pv-net").innerHTML = parts.join("<br>");
+    var h = st.hearing || {};
+    $("pv-hear").innerHTML = (h.kinds || []).map(function (x) {
+      return '<tr class="' + (x.count ? "" : "zero") + '"><td class="l">' + esc(x.label) + '</td><td class="n">' + x.count.toLocaleString() +
+        '</td><td class="t">' + (x.age_s != null ? esc(ago(x.age_s)) : "&ndash;") + '</td><td class="d">' + esc(x.desc) + "</td></tr>";
+    }).join("");
+    var fi = h.ifaces || {};
+    $("pv-ifaces").innerHTML = Object.keys(fi).length ? "Frames by interface " + Object.keys(fi).map(function (i) {
+      return esc(i) + " <b>" + fi[i].toLocaleString() + "</b>"; }).join(" &middot; ") +
+      (st.ipv6_devices ? " &middot; devices with IPv6 <b>" + st.ipv6_devices + "</b>" : "") : "";
+    $("pv-hints").innerHTML = (h.hints || []).map(function (t) { return "<li>" + esc(t) + "</li>"; }).join("");
+    var n = st.nudge || {};
+    document.querySelectorAll("#pn-opts .opt").forEach(function (b) {
+      var on = b.getAttribute("data-pn") === "1";
+      b.className = "opt" + (on ? "" : " off") + ((on === !!n.enabled) ? " on" : "");
+    });
+    $("pn-now").disabled = !st.running || !!n.busy;
+    $("pn-readout").innerHTML = n.busy ? "<b>Asking\u2026</b>" : n.last ? "Last asked <b>" + esc(ago(n.age_s)) + "</b>: <b>" +
+      (n.answers || 0) + "</b> device" + (n.answers === 1 ? "" : "s") + " answered." : "";
+  }
+  function ago(s) {
+    if (s == null) return "";
+    if (s < 90) return Math.round(s) + "s ago";
+    if (s < 5400) return Math.round(s / 60) + " min ago";
+    if (s < 129600) return Math.round(s / 3600) + " h ago";
+    return Math.round(s / 86400) + " d ago";
   }
   function loadPassive() {
     fetch("/api/passive?limit=0", { cache: "no-store" }).then(function (r) { return r.json(); }).then(function (d) {
@@ -628,6 +699,13 @@
       save({ kiosk_idle: parseInt(b.getAttribute("data-kli"), 10) });
     } else if (b.hasAttribute("data-pv")) {
       save({ passive: b.getAttribute("data-pv") === "1" }).then(function () { setTimeout(loadPassive, 1200); });
+    } else if (b.hasAttribute("data-pn")) {
+      save({ passive_nudge: b.getAttribute("data-pn") === "1" }).then(loadPassive);
+    } else if (b.id === "pn-now") {
+      b.disabled = true; $("pn-readout").innerHTML = "<b>Asking…</b>";
+      fetch("/api/passive/nudge", { method: "POST" }).then(function (r) { return r.json(); }).then(function () {
+        loadPassive();
+      }, loadPassive);
     } else if (b.id === "vdb-update") {
       b.disabled = true; b.textContent = "Updating\u2026";
       fetch("/api/vendor-db/update", { method: "POST" }).then(function (r) { return r.json(); }).then(function (d) {

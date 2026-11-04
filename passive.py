@@ -14,7 +14,13 @@ link it only hears the laptop at the other end):
   mDNS     Bonjour announcements: names, services, model TXT records.
   SSDP     UPnP NOTIFY announcements: server string, device type.
   NetBIOS  Windows name registrations / refreshes.
-  LLDP     the switch announcing itself: switch name, port, VLAN.
+  LLDP     the switch announcing itself: switch name, port, VLAN, and with
+  CDP      LLDP-MED / CDP also model, firmware, capabilities (switch, router,
+           phone, access point) and the voice VLAN.
+  IPv6     neighbor / router discovery, MLD group joins, DHCPv6 requests
+           (vendor class, FQDN, and a client ID that often holds the real
+           hardware MAC and the date the OS generated it). Devices are
+           chatty on IPv6 even on networks that "don't use it".
   CHATTER  background broadcasts apps make (Dropbox, Steam, Spotify, LLMNR,
            WS-Discovery, SSDP searches with user agents, Windows browser
            announcements, Ubiquiti / MikroTik discovery... see fpdb.py).
@@ -26,6 +32,12 @@ link it only hears the laptop at the other end):
 Needs the CAP_NET_RAW capability (aliana.service grants it; run setup.sh
 after pulling). Without it, passive discovery shows as unavailable and
 everything else works as before.
+
+PROMPTED announcements (optional, setting passive_nudge, on by default):
+every NUDGE_MINUTES Aliana sends one "who's out there?" query per protocol
+-- an mDNS service browse, an SSDP search, a WS-Discovery probe and an IPv6
+all-nodes ping, the same packets phones and PCs send all the time -- and
+listens to the answers. This is the only part of LISTEN that sends.
 
 Heard devices are kept in aliana.db (table passive_devices), flushed every
 30 seconds, so the SD card isn't written on every packet.
@@ -52,7 +64,7 @@ _devices = {}                # mac -> record (see _rec)
 _dirty = set()
 _network = {}                # what the DHCP server / switch told us
 _state = {"running": False, "error": None, "started": None, "frames": 0, "parsed": 0,
-          "last_frame": None, "by_kind": {}}
+          "last_frame": None, "by_kind": {}, "kind_last": {}, "by_iface": {}}
 _stop = threading.Event()
 _thread = None
 _own_macs = set()
@@ -62,29 +74,61 @@ _own_macs = set()
 #
 # Classic BPF, attached to the socket so the kernel only hands Python the
 # frames we parse (scans can generate thousands of frames a second):
-#   ARP, LLDP, and UDP (not fragmented) to ports 67, 68, 137, 1900, 5353.
+#   ARP, LLDP, CDP (802.3 frames to 01:00:0C:CC:CC:CC), IPv4 TCP SYN /
+#   SYN-ACK (not fragmented), IPv4 broadcast / multicast UDP, IPv6 ICMPv6
+#   (neighbor discovery, ping replies) and IPv6 multicast.
 
 def _bpf_program():
-    LDH_ABS, LDB_ABS, LDXB_MSH, LDB_IND = 0x28, 0x30, 0xB1, 0x50
-    JEQ, JSET, RET = 0x15, 0x45, 0x06
-    ins = [
-        (LDH_ABS, 0, 0, 12),           # 0  ethertype
-        (JEQ, 13, 0, 0x0806),          # 1  ARP -> accept
-        (JEQ, 12, 0, 0x88CC),          # 2  LLDP -> accept
-        (JEQ, 0, 10, 0x0800),          # 3  not IPv4 -> drop
-        (LDH_ABS, 0, 0, 20),           # 4  flags + fragment offset
-        (JSET, 8, 0, 0x1FFF),          # 5  fragment -> drop
-        (LDXB_MSH, 0, 0, 14),          # 6  X = IP header length
-        (LDB_ABS, 0, 0, 23),           # 7  IP protocol
-        (JEQ, 0, 2, 6),                # 8  TCP?
-        (LDB_IND, 0, 0, 27),           # 9  TCP flags
-        (JSET, 4, 3, 0x02),            # 10 SYN or SYN-ACK -> accept, other TCP -> drop
-        (JEQ, 0, 2, 17),               # 11 not UDP -> drop
-        (LDB_ABS, 0, 0, 0),            # 12 destination MAC, first byte
-        (JSET, 1, 0, 0x01),            # 13 broadcast / multicast UDP -> accept
-        (RET, 0, 0, 0),                # 14 drop
-        (RET, 0, 0, 0x0000FFFF),       # 15 accept
+    """Assembled from labels so the jump offsets stay right."""
+    LDH, LDB, LDW, LDXB_MSH, LDB_IND = 0x28, 0x30, 0x20, 0xB1, 0x50
+    JEQ, JGT, JSET, RET = 0x15, 0x25, 0x45, 0x06
+    prog = [
+        (LDH, 12),                         # ethertype / 802.3 length
+        (JEQ, 0x0806, "ACCEPT", None),     # ARP
+        (JEQ, 0x88CC, "ACCEPT", None),     # LLDP
+        (JEQ, 0x86DD, "V6", None),         # IPv6
+        (JEQ, 0x0800, "V4", None),         # IPv4
+        (JGT, 1500, "DROP", None),         # other Ethernet II -> drop
+        (LDW, 0),                          # 802.3: destination MAC, first 4 bytes
+        (JEQ, 0x01000CCC, "ACCEPT", "DROP"),   # CDP multicast
+        "V4",
+        (LDH, 20),                         # flags + fragment offset
+        (JSET, 0x1FFF, "DROP", None),      # fragment
+        (LDXB_MSH, 14),                    # X = IP header length
+        (LDB, 23),                         # protocol
+        (JEQ, 6, None, "UDP"),
+        (LDB_IND, 27),                     # TCP flags
+        (JSET, 0x02, "ACCEPT", "DROP"),    # SYN / SYN-ACK
+        "UDP",
+        (JEQ, 17, "MCAST", "DROP"),
+        "V6",
+        (LDB, 20),                         # next header
+        (JEQ, 58, "ACCEPT", "MCAST"),      # ICMPv6 (also unicast: ping replies, NA)
+        "MCAST",
+        (LDB, 0),                          # destination MAC, first byte
+        (JSET, 0x01, "ACCEPT", "DROP"),    # broadcast / multicast
+        "DROP",
+        (RET, 0),
+        "ACCEPT",
+        (RET, 0x0000FFFF),
     ]
+    labels, n = {}, 0
+    for x in prog:
+        if isinstance(x, str):
+            labels[x] = n
+        else:
+            n += 1
+    ins, n = [], 0
+    for x in prog:
+        if isinstance(x, str):
+            continue
+        n += 1
+        if x[0] in (JEQ, JGT, JSET):
+            jt = labels[x[2]] - n if x[2] else 0
+            jf = labels[x[3]] - n if x[3] else 0
+            ins.append((x[0], jt, jf, x[1]))
+        else:
+            ins.append((x[0], 0, 0, x[1]))
     return ins
 
 
@@ -136,6 +180,9 @@ def _rec(mac, iface):
 
 
 def _set_ip(r, ip, how):
+    if ip and ":" in ip:
+        _set_ip6(r, ip)
+        return
     if not ip or ip in ("0.0.0.0", "255.255.255.255") or ip.startswith(("169.254.", "127.")):
         return
     r["ip"] = ip
@@ -147,8 +194,24 @@ def _set_ip(r, ip, how):
     r["info"]["ip_source"] = how
 
 
+def _set_ip6(r, ip):
+    if not ip or ip == "::" or ip.startswith("ff"):
+        return
+    ips = r["info"].setdefault("ip6", {})
+    ips[ip] = _now()
+    if len(ips) > 8:
+        for old in sorted(ips, key=ips.get)[:-8]:
+            ips.pop(old, None)
+
+
 def _count(kind):
     _state["by_kind"][kind] = _state["by_kind"].get(kind, 0) + 1
+    _state["kind_last"][kind] = _now()
+    if _nudge["until"] and time.time() < _nudge["until"] and _cur_mac[0]:
+        _nudge["macs"].add(_cur_mac[0])
+
+
+_cur_mac = [None]       # sender of the frame being parsed (for nudge answers)
 
 
 # ---------------------------------------------------------------- parsers
@@ -318,7 +381,7 @@ def _parse_ssdp(payload, src_mac, src_ip, iface):
         _count("chatter")
         _set_ip(r, src_ip, "ssdp")
         return
-    if not first.startswith("NOTIFY"):
+    if not first.startswith(("NOTIFY", "HTTP/1.1 200", "HTTP/1.0 200")):
         return
     _count("ssdp")
     h = {}
@@ -332,7 +395,7 @@ def _parse_ssdp(payload, src_mac, src_ip, iface):
         s["server"] = _clean(h["server"], 120)
     if h.get("location"):
         s["location"] = _clean(h["location"], 160)
-    nt = h.get("nt") or ""
+    nt = h.get("nt") or h.get("st") or ""
     if "device:" in nt:
         s["device_type"] = _clean(nt, 120)
     s["at"] = _now()
@@ -443,6 +506,33 @@ def _parse_netbios(payload, src_mac, src_ip, iface):
     _set_ip(r, src_ip, "netbios")
 
 
+_LLDP_CAPS = {0x02: "repeater", 0x04: "switch", 0x08: "access point", 0x10: "router", 0x20: "phone",
+              0x40: "cable modem", 0x80: "station"}
+_CDP_CAPS = {0x01: "router", 0x02: "switch", 0x04: "switch", 0x08: "switch", 0x10: "station",
+             0x40: "repeater", 0x80: "phone", 0x100: "managed device"}
+_MED_CLASS = {1: "endpoint (class I)", 2: "media endpoint (class II)", 3: "communication device (class III)",
+              4: "network connectivity device"}
+_MED_TEXT = {5: "hardware", 6: "firmware", 7: "software", 8: "serial", 9: "manufacturer", 10: "model", 11: "asset"}
+
+
+def _caps(bits, table):
+    return sorted({name for bit, name in table.items() if bits & bit})
+
+
+def _neighbor(src_mac, iface, info, proto):
+    """A switch / phone / AP announcing itself: kept for the network panel
+    and as that device's own LISTEN evidence."""
+    _count(proto.lower())
+    info = {k: v for k, v in info.items() if v not in (None, "", [])}
+    info.update({"proto": proto, "switch_mac": src_mac, "iface": iface, "at": _now()})
+    _network.setdefault(proto.lower(), {})[iface] = info
+    if not _skip_mac(src_mac):
+        r = _rec(src_mac, iface)
+        r["info"]["neighbor"] = {k: v for k, v in info.items() if k not in ("switch_mac", "iface")}
+        if info.get("mgmt_ip"):
+            _set_ip(r, info["mgmt_ip"], proto.lower())
+
+
 def _parse_lldp(frame, src_mac, iface):
     i, info = 14, {}
     while i + 2 <= len(frame):
@@ -460,15 +550,254 @@ def _parse_lldp(frame, src_mac, iface):
             info["system_name"] = _clean(v, 80)
         elif t == 6:
             info["system_desc"] = _clean(v, 200)
+        elif t == 7 and len(v) >= 4:
+            en = struct.unpack(">H", v[2:4])[0] or struct.unpack(">H", v[0:2])[0]
+            info["caps"] = _caps(en, _LLDP_CAPS)
         elif t == 8 and len(v) >= 6 and v[1] == 1:
             info["mgmt_ip"] = socket.inet_ntoa(v[2:6])
-        elif t == 127 and len(v) >= 6 and v[:3] == b"\x00\x80\xc2" and v[3] == 1:
-            info["vlan"] = struct.unpack(">H", v[4:6])[0]
+        elif t == 127 and len(v) >= 4:
+            oui, sub, d = v[:3], v[3], v[4:]
+            if oui == b"\x00\x80\xc2" and sub == 1 and len(d) >= 2:          # 802.1 port VLAN
+                info["vlan"] = struct.unpack(">H", d[:2])[0]
+            elif oui == b"\x00\x80\xc2" and sub == 3 and len(d) >= 3:        # 802.1 VLAN name
+                info.setdefault("vlan_names", []).append(_clean(d[3:3 + d[2]], 32))
+            elif oui == b"\x00\x12\xbb":                                     # LLDP-MED
+                if sub == 1 and len(d) >= 3:
+                    info["med_class"] = _MED_CLASS.get(d[2])
+                elif sub == 2 and len(d) >= 4:                                # network policy
+                    app_t, bits = d[0], int.from_bytes(d[1:4], "big")
+                    vid = (bits >> 9) & 0xFFF
+                    if app_t == 1 and not bits & 0x800000:         # voice, policy known
+                        info["voice_vlan"] = vid if bits & 0x400000 else 0    # 0 = untagged
+                elif sub in _MED_TEXT:
+                    info[_MED_TEXT[sub]] = _clean(d, 60)
+            elif oui == b"\x00\x12\x0f" and sub == 2 and len(d) >= 3:        # 802.3 PoE
+                info["poe"] = True
     if not info:
         return
-    _count("lldp")
-    info.update({"switch_mac": src_mac, "iface": iface, "at": _now()})
-    _network.setdefault("lldp", {})[iface] = {k: v for k, v in info.items() if v is not None}
+    _neighbor(src_mac, iface, info, "LLDP")
+
+
+def _parse_cdp(frame, src_mac, iface):
+    if frame[14:22] != b"\xaa\xaa\x03\x00\x00\x0c\x20\x00" or len(frame) < 30:
+        return
+    i, info = 26, {}                       # skip version, TTL, checksum
+    while i + 4 <= len(frame):
+        t, ln = struct.unpack(">HH", frame[i:i + 4])
+        if ln < 4:
+            break
+        v = frame[i + 4:i + ln]
+        i += ln
+        if t == 1:
+            info["system_name"] = _clean(v, 80)
+        elif t == 3:
+            info["port_id"] = _clean(v, 60)
+        elif t == 4 and len(v) >= 4:
+            info["caps"] = _caps(struct.unpack(">I", v[:4])[0], _CDP_CAPS)
+        elif t == 5:
+            info["system_desc"] = _clean(v, 200)
+        elif t == 6:
+            info["model"] = _clean(v, 60)
+        elif t == 0x0A and len(v) >= 2:
+            info["vlan"] = struct.unpack(">H", v[:2])[0]
+        elif t == 0x0E and len(v) >= 3:
+            info["voice_vlan"] = struct.unpack(">H", v[1:3])[0]
+        elif t in (2, 0x16) and len(v) >= 4 and "mgmt_ip" not in info:
+            j = 4
+            for _ in range(min(struct.unpack(">I", v[:4])[0], 8)):
+                if j + 2 > len(v):
+                    break
+                plen = v[j + 1]
+                proto = v[j + 2:j + 2 + plen]
+                j += 2 + plen
+                alen = struct.unpack(">H", v[j:j + 2])[0] if j + 2 <= len(v) else 0
+                addr = v[j + 2:j + 2 + alen]
+                j += 2 + alen
+                if proto == b"\xcc" and alen == 4:
+                    info["mgmt_ip"] = socket.inet_ntoa(addr)
+                    break
+    if info:
+        _neighbor(src_mac, iface, info, "CDP")
+
+
+# ---------------------------------------------------------------- IPv6
+#
+# Even networks that "don't use IPv6" are full of it on the local link:
+# every modern OS sends neighbor / router solicitations, joins multicast
+# groups (MLD), and often asks DHCPv6 -- whose client ID (DUID) usually
+# contains a hardware MAC and the date it was generated.
+
+_V6_GROUPS = {"ff02::fb": "mDNS", "ff02::1:3": "LLMNR", "ff02::c": "SSDP", "ff05::c": "SSDP",
+              "ff02::f": "UPnP", "ff02::1:2": "DHCPv6", "ff02::101": "NTP", "ff02::2": None,
+              "ff02::16": None, "ff02::1": None}
+_DHCP6_MSG = {1: "SOLICIT", 3: "REQUEST", 4: "CONFIRM", 5: "RENEW", 6: "REBIND", 11: "INFORM"}
+
+
+def _ip6(b):
+    return socket.inet_ntop(socket.AF_INET6, bytes(b[:16]))
+
+
+def _eui64_mac(addr):
+    """The MAC inside an EUI-64 interface ID (ff:fe in the middle), or None."""
+    iid = addr[8:16]
+    if len(iid) == 8 and iid[3:5] == b"\xff\xfe":
+        return _mac(bytes([iid[0] ^ 0x02]) + iid[1:3] + iid[5:8])
+    return None
+
+
+def _v6_addr(r, addr):
+    """Remembers one of a device's IPv6 addresses and how it was made."""
+    ip = _ip6(addr)
+    if ip == "::" or ip.startswith("ff"):
+        return
+    _set_ip6(r, ip)
+    n6 = r["info"].setdefault("ndp", {})
+    mac = _eui64_mac(addr)
+    if mac:
+        n6["eui64"] = True
+        if mac != r["mac"]:
+            n6["eui64_mac"] = mac
+    elif not ip.startswith("fe80"):
+        n6["private_addrs"] = True       # random / stable-privacy interface IDs
+
+
+def _handle_ip6(frame, src_mac, iface):
+    if len(frame) < 54 or _skip_mac(src_mac):
+        return False
+    nh, off = frame[20], 54
+    hops = 0
+    while nh in (0, 43, 60) and hops < 4 and off + 8 <= len(frame):     # extension headers
+        nh, off = frame[off], off + (frame[off + 1] + 1) * 8
+        hops += 1
+    src = frame[22:38]
+    src_ip = _ip6(src)
+    if nh == 58:
+        return _parse_icmp6(frame[off:], src, src_mac, iface)
+    if nh != 17 or off + 8 > len(frame):
+        return False
+    sport, dport = struct.unpack(">HH", frame[off:off + 4])
+    payload = frame[off + 8:]
+    if dport == 547:
+        _parse_dhcp6(payload, src, src_mac, iface)
+    elif dport == 5353:
+        _parse_mdns(payload, src_mac, src_ip, iface)
+    elif dport == 1900:
+        _parse_ssdp(payload, src_mac, src_ip, iface)
+    elif dport == 546:
+        return False
+    else:
+        return _parse_chatter(payload, src_mac, src_ip, sport, dport, iface)
+    return True
+
+
+def _parse_icmp6(icmp, src, src_mac, iface):
+    if len(icmp) < 8:
+        return False
+    t, body = icmp[0], icmp[4:]
+    if t not in (128, 129, 131, 133, 134, 135, 136, 143):
+        return False
+    r = _rec(src_mac, iface)
+    n6 = r["info"].setdefault("ndp", {})
+    _v6_addr(r, src)
+    if t == 135 and len(body) >= 20:                     # neighbor solicitation
+        if src == bytes(16):                             # from :: -> claiming a new address (DAD)
+            _v6_addr(r, body[4:20])
+    elif t == 136 and len(body) >= 20:                   # neighbor advertisement
+        _v6_addr(r, body[4:20])
+        if body[0] & 0x80:
+            n6["router"] = True
+    elif t == 133:
+        n6["rs"] = _now()
+    elif t == 134 and len(body) >= 12:                   # router advertisement
+        n6["router"] = True
+        ra = {"ip": _ip6(src), "mac": src_mac, "managed": bool(body[1] & 0x80), "other": bool(body[1] & 0x40),
+              "lifetime": struct.unpack(">H", body[2:4])[0], "prefixes": [], "dns": [], "iface": iface, "at": _now()}
+        o = 12
+        while o + 2 <= len(body) and body[o + 1]:
+            ot, ol = body[o], body[o + 1] * 8
+            opt = body[o:o + ol]
+            if ot == 3 and len(opt) >= 32:
+                ra["prefixes"].append(f"{_ip6(opt[16:32])}/{opt[2]}")
+            elif ot == 25 and len(opt) >= 24:
+                ra["dns"] += [_ip6(opt[k:k + 16]) for k in range(8, len(opt) - 15, 16)]
+            o += ol
+        _network.setdefault("ipv6", {}).setdefault("routers", {})[src_mac] = ra
+        if len(_network["ipv6"]["routers"]) > 6:
+            old = min(_network["ipv6"]["routers"], key=lambda m: _network["ipv6"]["routers"][m]["at"])
+            _network["ipv6"]["routers"].pop(old, None)
+    elif t == 129:
+        n6["ping"] = _now()                              # answered the all-nodes ping
+    elif t in (131, 143):                                # MLD: multicast groups it listens on
+        groups = set(n6.get("groups") or [])
+        if t == 131 and len(body) >= 20:
+            addrs = [body[4:20]]
+        else:
+            addrs, o = [], 4
+            for _ in range(struct.unpack(">H", body[2:4])[0] if len(body) >= 4 else 0):
+                if o + 20 > len(body):
+                    break
+                addrs.append(body[o + 4:o + 20])
+                o += 20 + 16 * struct.unpack(">H", body[o + 2:o + 4])[0] + 4 * body[o + 1]
+        for a in addrs:
+            name = _V6_GROUPS.get(_ip6(a))
+            if name:
+                groups.add(name)
+        n6["groups"] = sorted(groups)
+    n6["at"] = _now()
+    _count("ipv6")
+    return True
+
+
+def _parse_dhcp6(payload, src, src_mac, iface):
+    if len(payload) < 4 or payload[0] not in _DHCP6_MSG:
+        return
+    opts, i = {}, 4
+    while i + 4 <= len(payload):
+        code, ln = struct.unpack(">HH", payload[i:i + 4])
+        opts.setdefault(code, payload[i + 4:i + 4 + ln])
+        i += 4 + ln
+    _count("dhcpv6")
+    r = _rec(src_mac, iface)
+    _v6_addr(r, src)
+    d = r["info"].setdefault("dhcp6", {})
+    duid = opts.get(1) or b""
+    if len(duid) >= 4:
+        dt, hw = struct.unpack(">HH", duid[:4])
+        if dt == 1 and len(duid) >= 14:                      # link-layer + time
+            secs = struct.unpack(">I", duid[4:8])[0]
+            d["duid"] = "LLT"
+            d["duid_date"] = (datetime.datetime(2000, 1, 1) + datetime.timedelta(seconds=secs)).date().isoformat()
+            if hw == 1:
+                d["duid_mac"] = _mac(duid[8:14])
+        elif dt == 3 and len(duid) >= 10:                    # link-layer
+            d["duid"] = "LL"
+            if hw == 1:
+                d["duid_mac"] = _mac(duid[4:10])
+        elif dt == 2 and len(duid) >= 8:
+            d["duid"] = "EN"
+            d["duid_en"] = struct.unpack(">I", duid[2:6])[0]
+        elif dt == 4:
+            d["duid"] = "UUID"
+    vc = opts.get(16) or b""
+    if len(vc) >= 6:
+        d["vendor_en"] = struct.unpack(">I", vc[:4])[0]
+        parts, j = [], 4
+        while j + 2 <= len(vc):
+            n = struct.unpack(">H", vc[j:j + 2])[0]
+            parts.append(_clean(vc[j + 2:j + 2 + n], 60) or "")
+            j += 2 + n
+        d["vendor_class"] = " ".join(p for p in parts if p)[:120] or None
+    if 39 in opts and len(opts[39]) > 1:
+        try:
+            import identify
+            d["fqdn"] = _clean(identify._read_name(opts[39][1:], 0)[0], 120)
+        except Exception:
+            pass
+    if 6 in opts:
+        oro = opts[6]
+        d["params"] = ",".join(str(struct.unpack(">H", oro[k:k + 2])[0]) for k in range(0, len(oro) - 1, 2))
+    d["msg"] = _DHCP6_MSG[payload[0]]
+    d["at"] = _now()
 
 
 def handle_frame(frame, iface, pkttype=0, ts=None):
@@ -489,12 +818,19 @@ def handle_frame(frame, iface, pkttype=0, ts=None):
         return
     _state["frames"] += 1
     _state["last_frame"] = _now()
+    _state["by_iface"][iface] = _state["by_iface"].get(iface, 0) + 1
+    _cur_mac[0] = src_mac
     with _lock:
         try:
             if etype == 0x0806:
                 _parse_arp(frame, iface, ts)
             elif etype == 0x88CC:
                 _parse_lldp(frame, src_mac, iface)
+            elif etype <= 1500:
+                _parse_cdp(frame, src_mac, iface)
+            elif etype == 0x86DD:
+                if not _handle_ip6(frame, src_mac, iface):
+                    return
             elif etype == 0x0800 and len(frame) >= 34:
                 ihl = (frame[14] & 0x0F) * 4
                 if len(frame) < 14 + ihl + 8:
@@ -712,6 +1048,183 @@ def forget_all():
         for k in ("frames", "parsed"):
             _state[k] = 0
         _state["by_kind"] = {}
+        _state["kind_last"] = {}
+        _state["by_iface"] = {}
+
+
+# ---------------------------------------------------------------- prompted announcements
+#
+# Waiting for devices to speak up can take hours (DHCP renews, mDNS
+# announces on change). So every NUDGE_MINUTES Aliana asks, once per
+# protocol, the same multicast questions phones and PCs ask all day long,
+# and LISTEN hears the answers:
+#   mDNS   a browse for the common service types (answers come back to us)
+#   SSDP   M-SEARCH ssdp:all
+#   WSD    a WS-Discovery Probe (Windows PCs, printers, scanners, cameras)
+#   IPv6   one ping to the all-nodes address ff02::1 (each IPv6 host answers)
+# Nothing is aimed at any one device; it's a handful of packets per
+# interface. Setting passive_nudge turns it off.
+
+NUDGE_MINUTES = 10
+NUDGE_LISTEN_S = 4
+_nudge = {"until": 0, "macs": set(), "last": None, "answers": None, "sent": 0, "error": None, "busy": False,
+          "next": None}
+
+_MDNS_BROWSE = ("_services._dns-sd._udp", "_device-info._tcp", "_workstation._tcp", "_smb._tcp", "_ipp._tcp",
+                "_printer._tcp", "_pdl-datastream._tcp", "_airplay._tcp", "_raop._tcp", "_googlecast._tcp",
+                "_companion-link._tcp", "_hap._tcp", "_spotify-connect._tcp", "_http._tcp", "_ssh._tcp",
+                "_sonos._tcp", "_amzn-wplay._tcp", "_rdlink._tcp")
+
+_SSDP_SEARCH = (b"M-SEARCH * HTTP/1.1\r\nHOST: 239.255.255.250:1900\r\nMAN: \"ssdp:discover\"\r\n"
+                b"MX: 2\r\nST: ssdp:all\r\nUSER-AGENT: Aliana/1.0 UPnP/1.1\r\n\r\n")
+
+
+def _mdns_browse():
+    def qname(n):
+        return b"".join(bytes([len(p)]) + p.encode() for p in (n + ".local").split(".")) + b"\x00"
+    q = b"".join(qname(n) + struct.pack(">HH", 12, 1) for n in _MDNS_BROWSE)
+    return struct.pack(">HHHHHH", 0, 0, len(_MDNS_BROWSE), 0, 0, 0) + q
+
+
+def _wsd_probe():
+    import uuid
+    return ('<?xml version="1.0" encoding="utf-8"?>'
+            '<soap:Envelope xmlns:soap="http://www.w3.org/2003/05/soap-envelope" '
+            'xmlns:wsa="http://schemas.xmlsoap.org/ws/2004/08/addressing" '
+            'xmlns:wsd="http://schemas.xmlsoap.org/ws/2005/04/discovery"><soap:Header>'
+            '<wsa:To>urn:schemas-xmlsoap-org:ws:2005:04:discovery</wsa:To>'
+            '<wsa:Action>http://schemas.xmlsoap.org/ws/2005/04/discovery/Probe</wsa:Action>'
+            f'<wsa:MessageID>urn:uuid:{uuid.uuid4()}</wsa:MessageID></soap:Header>'
+            '<soap:Body><wsd:Probe/></soap:Body></soap:Envelope>').encode()
+
+
+def _arp_table():
+    out = {}
+    try:
+        with open("/proc/net/arp") as f:
+            for line in f.readlines()[1:]:
+                p = line.split()
+                if len(p) >= 6 and p[3] != "00:00:00:00:00:00":
+                    out[p[0]] = p[3].upper()
+    except OSError:
+        pass
+    return out
+
+
+def _nudge_targets():
+    """[(iface, ipv4)] the Pi can ask on: up, with an address, not loopback."""
+    try:
+        import scanner
+        out = []
+        for i in scanner.list_interfaces():
+            if (i.get("ipv4") and i.get("state") in ("up", "unknown") and i.get("name") != "lo"
+                    and not i["name"].startswith(("docker", "veth", "br-"))):
+                out.append((i["name"], i["ipv4"].split("/")[0]))
+        return out
+    except Exception:
+        return []
+
+
+def _answer(data, ip, sport, iface, arp):
+    """A unicast answer to one of our questions: parse it like an announcement."""
+    mac = arp.get(ip)
+    if not mac or _skip_mac(mac):
+        return
+    _cur_mac[0] = mac
+    with _lock:
+        try:
+            if sport == 5353:
+                _parse_mdns(data, mac, ip, iface)
+            elif data[:9] in (b"HTTP/1.1 ", b"HTTP/1.0 "):
+                _parse_ssdp(data, mac, ip, iface)
+            elif b"ProbeMatch" in data[:4096]:
+                _parse_chatter(data, mac, ip, sport, 3702, iface)
+            else:
+                return
+            _state["parsed"] += 1
+            _nudge["macs"].add(mac)
+        except Exception:
+            pass
+
+
+def nudge_now():
+    """Sends the questions on every interface and listens for the answers.
+    Blocking (about NUDGE_LISTEN_S seconds); returns the summary."""
+    import select
+    if _nudge["busy"]:
+        return nudge_status()
+    _nudge.update(busy=True, error=None, macs=set(), until=time.time() + NUDGE_LISTEN_S + 2)
+    socks, sent = [], 0
+    try:
+        for iface, ip in _nudge_targets():
+            try:
+                u = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                u.bind((ip, 0))
+                u.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_IF, socket.inet_aton(ip))
+                u.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 1)
+                u.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_LOOP, 0)
+                u.setblocking(False)
+                for msg, dst in ((_mdns_browse(), ("224.0.0.251", 5353)), (_SSDP_SEARCH, ("239.255.255.250", 1900)),
+                                 (_wsd_probe(), ("239.255.255.250", 3702))):
+                    try:
+                        u.sendto(msg, dst)
+                        sent += 1
+                    except OSError:
+                        pass
+                socks.append((u, iface))
+            except OSError as e:
+                _nudge["error"] = f"{iface}: {e}"
+            try:                                   # IPv6 all-nodes ping (answers parsed by the listener)
+                v6 = socket.socket(socket.AF_INET6, socket.SOCK_RAW, socket.IPPROTO_ICMPV6)
+                idx = socket.if_nametoindex(iface)
+                v6.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_MULTICAST_IF, idx)
+                v6.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_MULTICAST_HOPS, 1)
+                v6.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_MULTICAST_LOOP, 0)
+                v6.sendto(struct.pack(">BBHHH", 128, 0, 0, os.getpid() & 0xFFFF, 1) + b"aliana", ("ff02::1", 0, 0, idx))
+                v6.close()
+                sent += 1
+            except OSError:
+                pass                               # no IPv6 on this interface / no permission
+        end = time.time() + NUDGE_LISTEN_S
+        while socks and time.time() < end:
+            ready, _, _ = select.select([s_ for s_, _ in socks], [], [], 0.3)
+            if not ready:
+                continue
+            arp = _arp_table()
+            for s_ in ready:
+                iface = next(i for x, i in socks if x is s_)
+                while True:
+                    try:
+                        data, (aip, aport) = s_.recvfrom(9000)
+                    except (BlockingIOError, OSError):
+                        break
+                    _answer(data, aip, aport, iface, arp)
+        time.sleep(0.5)                            # late ping replies
+    finally:
+        for s_, _ in socks:
+            s_.close()
+        _nudge.update(busy=False, sent=sent, last=_now(), answers=len(_nudge["macs"]), until=0)
+        print(f"aliana passive: asked who's there ({sent} queries), {_nudge['answers']} devices answered", flush=True)
+    return nudge_status()
+
+
+def nudge_enabled():
+    import scanner
+    return scanner._get_setting("passive_nudge", "1") == "1"
+
+
+def set_nudge(on):
+    import scanner
+    scanner._set_setting("passive_nudge", "1" if on else "0")
+
+
+def nudge_status():
+    return {"enabled": nudge_enabled(), "last": _nudge["last"], "age_s": _age(_nudge["last"]), "answers": _nudge["answers"], "sent": _nudge["sent"],
+            "busy": _nudge["busy"], "error": _nudge["error"], "minutes": NUDGE_MINUTES}
+
+
+def _nudge_bg():
+    threading.Thread(target=nudge_now, name="aliana-nudge", daemon=True).start()
 
 
 # ---------------------------------------------------------------- the listener
@@ -776,6 +1289,7 @@ def _listen():
     _state.update(running=True, error=None, started=_now())
     _load_own_macs()
     last_flush = last_macs = time.time()
+    next_nudge = time.time() + 20
     print("aliana passive: listening", flush=True)
     try:
         while not _stop.is_set():
@@ -794,6 +1308,13 @@ def _listen():
             if now - last_macs >= 60:      # interfaces come and go (USB gadget, Wi-Fi)
                 _load_own_macs()
                 last_macs = now
+            if now >= next_nudge:
+                next_nudge = now + NUDGE_MINUTES * 60
+                try:
+                    if nudge_enabled():
+                        _nudge_bg()
+                except Exception:
+                    pass
     finally:
         sock.close()
         flush()
@@ -852,7 +1373,59 @@ def status():
                 "last_hour": sum(1 for r in devs if recent(r, 3600)),
                 "last_day": sum(1 for r in devs if recent(r, 86400)),
                 "dhcp_names": sum(1 for r in devs if (r["info"].get("dhcp") or {}).get("hostname")),
-                "network": json.loads(json.dumps(_network))}
+                "ipv6_devices": sum(1 for r in devs if r["info"].get("ip6")),
+                "network": json.loads(json.dumps(_network)),
+                "hearing": hearing(), "nudge": nudge_status()}
+
+
+# What LISTEN hears, by kind, in the order the Settings panel shows it.
+KINDS = [("arp", "ARP", "every device that talks"), ("dhcp", "DHCP", "address requests: names, OS hints"),
+         ("dhcpv6", "DHCPv6", "IPv6 address requests: hardware ID, OS hints"),
+         ("ipv6", "IPv6 discovery", "neighbor / router discovery, multicast joins, ping replies"),
+         ("mdns", "mDNS", "Bonjour names and services"), ("ssdp", "UPnP", "UPnP announcements and search replies"),
+         ("netbios", "NetBIOS", "Windows name registrations"),
+         ("chatter", "App chatter", "background broadcasts from apps, WS-Discovery, LLMNR"),
+         ("lldp", "LLDP", "switch / phone / AP announcements"), ("cdp", "CDP", "Cisco-style neighbor announcements"),
+         ("tcp", "TCP stack", "replies to scans: fingerprint traits")]
+
+
+def _age(iso):
+    """Seconds since a timestamp from _now() (browsers may be in another time zone)."""
+    try:
+        return max(0, int(time.time() - datetime.datetime.fromisoformat(iso).timestamp()))
+    except (TypeError, ValueError):
+        return None
+
+
+def hearing():
+    """Per-kind counts, per-interface frames, and plain-language hints about
+    why LISTEN might be hearing little. Call with _lock held or not."""
+    by, last = dict(_state["by_kind"]), dict(_state["kind_last"])
+    ifaces = dict(_state["by_iface"])
+    kinds = [{"kind": k, "label": lab, "desc": d, "count": by.get(k, 0), "last": last.get(k),
+              "age_s": _age(last.get(k))} for k, lab, d in KINDS]
+    hints = []
+    if _state["running"]:
+        try:
+            age = time.time() - datetime.datetime.fromisoformat(_state["started"]).timestamp()
+        except (TypeError, ValueError):
+            age = 0
+        real = {i: n for i, n in ifaces.items() if not i.startswith(("lo", "usb"))}
+        if not real and age > 60:
+            hints.append("Only the USB link (or nothing) is being heard: the Pi isn't on the network yet.")
+        elif real and all(i.startswith("wl") for i in real):
+            hints.append("Listening on Wi-Fi only. Access points often filter or thin out broadcasts and multicast; "
+                         "an Ethernet cable to the switch hears much more.")
+        if age > 1800 and not by.get("dhcp"):
+            hints.append("No DHCP heard yet. Devices only ask when they join or renew (often every few hours); "
+                         "leave Aliana listening longer.")
+        if age > 600 and not by.get("ipv6") and not by.get("dhcpv6"):
+            hints.append("No IPv6 heard: the network (or the switch) may block it, or devices have it turned off.")
+        if age > 600 and real and not by.get("lldp") and not by.get("cdp"):
+            hints.append("No switch announcements (LLDP / CDP): the switch has them off, or it's unmanaged.")
+        if not nudge_enabled():
+            hints.append("Prompted announcements are off, so LISTEN only hears devices when they speak up on their own.")
+    return {"kinds": kinds, "ifaces": ifaces, "hints": hints}
 
 
 def best_name(info):
@@ -861,8 +1434,12 @@ def best_name(info):
     d = info.get("dhcp") or {}
     nb = info.get("netbios") or {}
     md = info.get("mdns") or {}
+    d6 = info.get("dhcp6") or {}
+    nbr = info.get("neighbor") or {}
     for v, src in ((nb.get("name"), "NetBIOS"), (d.get("hostname"), "DHCP"),
                    ((d.get("fqdn") or "").split(".")[0] or None, "DHCP"),
+                   ((d6.get("fqdn") or "").split(".")[0] or None, "DHCPv6"),
+                   (nbr.get("system_name"), nbr.get("proto")),
                    (md.get("instance"), "mDNS"), ((md.get("names") or [None])[0], "mDNS")):
         if v:
             return v, src
@@ -879,14 +1456,20 @@ def merge_into(ident, mac):
     ident = ident if ident is not None else {}
     ident.setdefault("names", {})
     ident.setdefault("sources", [])
-    ident["passive"] = {k: info[k] for k in ("dhcp", "mdns", "ssdp", "netbios", "arp", "stack", "rtt", "chatter")
-                        if k in info}
+    ident["passive"] = {k: info[k] for k in ("dhcp", "mdns", "ssdp", "netbios", "arp", "stack", "rtt", "chatter",
+                                             "ip6", "ndp", "dhcp6", "neighbor") if k in info}
     ident["passive"]["first_heard"] = rec["first_seen"]
     ident["passive"]["last_heard"] = rec["last_seen"]
     d = info.get("dhcp") or {}
+    d6 = info.get("dhcp6") or {}
     if d.get("hostname"):
         ident["names"]["dhcp"] = d["hostname"]
-    if d and "dhcp" not in ident["sources"]:
+    elif d6.get("fqdn"):
+        ident["names"]["dhcp"] = d6["fqdn"].split(".")[0]
+    nbr = info.get("neighbor") or {}
+    if nbr.get("system_name"):
+        ident["names"].setdefault("lldp", nbr["system_name"])
+    if (d or d6) and "dhcp" not in ident["sources"]:
         ident["sources"].append("dhcp")
     nb = info.get("netbios") or {}
     if nb.get("name") and not ident.get("netbios"):

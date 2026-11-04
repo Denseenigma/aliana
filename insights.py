@@ -275,8 +275,9 @@ def _model_from(ident, host):
 #   SCAN         what the device serves when asked: open ports, services,
 #                web pages, the NetBIOS / mDNS / UPnP / DNS lookups Aliana
 #                sent, and its scanned MAC (maker, virtual / random prefixes).
-#   LISTEN       what it announced on its own, heard by passive.py: DHCP,
-#                mDNS / UPnP / NetBIOS announcements.
+#   LISTEN       what it announced on its own, heard by passive.py: DHCP /
+#                DHCPv6, IPv6 neighbor discovery, mDNS / UPnP / NetBIOS,
+#                LLDP / CDP (also answers to Aliana's prompted announcements).
 #   FINGERPRINT  how it behaves: network-stack traits (TTL, IP ID, TCP
 #                options), reply timing (wired / wireless), nmap's OS
 #                fingerprint, and the RMM record when there is one.
@@ -285,7 +286,7 @@ def _model_from(ident, host):
 
 SYSTEMS = [
     {"key": "scan", "name": "SCAN", "num": "1", "desc": "What it serves when asked: ports, services, web pages, name lookups, its MAC"},
-    {"key": "listen", "name": "LISTEN", "num": "2", "desc": "What it announced on its own: DHCP, mDNS, UPnP, NetBIOS"},
+    {"key": "listen", "name": "LISTEN", "num": "2", "desc": "What it announced on its own: DHCP, IPv6, mDNS, UPnP, NetBIOS, LLDP / CDP"},
     {"key": "fingerprint", "name": "FINGERPRINT", "num": "3",
      "desc": "How it behaves: network stack, timing, OS fingerprint, RMM record"},
 ]
@@ -446,6 +447,15 @@ def classify_host(host):
     # -- LISTEN: the DHCP request it broadcast
     for t, sc, why in _dhcp_clues((ident.get("passive") or {}).get("dhcp") or {}, host, ident):
         add(t, sc, why, "listen")
+    # -- LISTEN: IPv6 (DHCPv6, neighbor discovery) and LLDP / CDP self-announcements
+    lc, lf, duid_vendor = _fpdb.listen_clues(ident.get("passive") or {}, host.get("mac"))
+    for t, sc, why in lc:
+        add(t, sc, why, "listen")
+    facts += lf
+    d6vc = ((ident.get("passive") or {}).get("dhcp6") or {}).get("vendor_class")
+    if d6vc:
+        for t, sc, why in _dhcp_clues({"vendor_class": d6vc}, host, ident):
+            add(t, sc, why.replace("DHCP:", "DHCPv6:"), "listen")
     # -- SCAN: it's the address Aliana routes through
     if ident.get("gateway"):
         add("network", 96, "default gateway (routing table)", "scan")
@@ -529,7 +539,7 @@ def classify_host(host):
     # -- names, credited to whichever system learned them
     names = ident.get("names") or {}
     name_src = {"netbios": nb_sys, "mdns": md_sys, "mdns_instance": md_sys, "upnp": up_sys,
-                "dns": "scan", "dhcp": "listen", "rmm": "fingerprint", "rdp": "scan"}
+                "dns": "scan", "dhcp": "listen", "lldp": "listen", "rmm": "fingerprint", "rdp": "scan"}
     named = []
     for k, n in names.items():
         if n and (n, name_src.get(k, "scan")) not in named:
@@ -558,6 +568,13 @@ def classify_host(host):
         add("vm", 80, "KVM/QEMU virtual network adapter", "scan")
     if private:
         add("mobile", 48, "private (randomized) MAC — phones, tablets and laptops use these", "scan")
+    # -- LISTEN: the hardware MAC inside its DHCPv6 client ID (often the real maker behind a private MAC)
+    if duid_vendor:
+        dv = duid_vendor.lower()
+        for t, sc, frags in _VENDORS:
+            if any(f in dv for f in frags):
+                add(t, max(sc - 6, 40), f"hardware maker {duid_vendor} (from its DHCPv6 client ID)", "listen")
+                break
 
     model = _model_from(ident, host)
     consensus = _decide(clues)

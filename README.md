@@ -187,7 +187,7 @@ scan has a Triad bar.
 ## Passive discovery (listening only)
 
 Alongside scans, Aliana **listens** to what devices announce about themselves
-and never sends anything (`passive.py`):
+(`passive.py`):
 
 - **DHCP** requests: the device's own **hostname** (even on networks whose DNS
   can't do reverse lookups), its vendor class (`MSFT 5.0` = Windows,
@@ -197,7 +197,28 @@ and never sends anything (`passive.py`):
 - **ARP**: every device that talks, with its IP -- including quiet ones that
   ignore scans.
 - **mDNS / Bonjour**, **UPnP NOTIFY** and **NetBIOS** announcements.
-- **LLDP** from the switch: switch name, port and VLAN (Settings shows them).
+- **LLDP / LLDP-MED / CDP** from switches, phones and access points: name,
+  model, firmware, port, VLAN, **voice VLAN**, and what it is (switch, router,
+  phone, AP) -- which also identifies the announcing device itself.
+- **IPv6**, even on networks that "don't use it": neighbor and router
+  discovery, multicast group joins, and **DHCPv6** requests, whose vendor class
+  and FQDN name Windows PCs, and whose client ID usually holds a **hardware MAC**
+  (the real maker behind a private MAC) and the date it was made (often the OS
+  install date). Router advertisements show the IPv6 prefix and DNS.
+
+**Prompted announcements** (Settings, on by default): every 10 minutes
+Aliana asks once, to the whole network, "who's out there?" -- an mDNS service
+browse, an SSDP search, a WS-Discovery probe and an IPv6 all-nodes ping, the
+same handful of packets phones and PCs send all day -- and LISTEN hears the
+answers at once instead of waiting hours for devices to speak up. Nothing is
+aimed at any single device. **Ask now** runs it immediately. This is the only
+part of LISTEN that sends; turn it off to keep LISTEN strictly passive.
+
+Settings > Passive discovery > **What LISTEN is hearing** counts each kind of
+announcement and frames per interface, with hints when the spot is poor
+(Wi-Fi only -- access points thin out multicast, so Ethernet hears far more;
+no IPv6; no LLDP/CDP; no DHCP yet). For a full view of one network, mirror
+the switch uplink (SPAN) to the Pi's port: LISTEN then hears everything.
 
 Heard devices get a **DHCP** chip on the dashboard and feed the device-type
 guess; devices heard but never scanned show on the Devices page as

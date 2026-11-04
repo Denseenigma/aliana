@@ -1012,6 +1012,7 @@ def _settings_state():
         "exclusions": scanner.get_exclusions(),
         "identify": scanner.get_identify_enabled(),
         "passive": passive.enabled(),
+        "passive_nudge": passive.nudge_enabled(),
         "deep_unknowns_auto": scanner._get_setting("deep_unknowns_auto", "0") == "1",
         "kiosk_lock": kiosk_lock_enabled(),
         "kiosk_idle": kiosk_idle(),
@@ -1085,6 +1086,8 @@ def api_settings():
             scanner._set_setting("kiosk_idle", str(v))
         if "passive" in data:
             passive.set_enabled(bool(data["passive"]))
+        if "passive_nudge" in data:
+            passive.set_nudge(bool(data["passive_nudge"]))
         if "exclusions" in data:
             try:
                 scanner.set_exclusions(data["exclusions"])
@@ -1426,9 +1429,18 @@ def api_passive():
         n, src = passive.best_name(r["info"])
         out.append({"mac": r["mac"], "ip": r["ip"], "name": n, "name_source": src, "last_seen": r["last_seen"],
                     "first_seen": r["first_seen"], "iface": r["iface"],
-                    "kinds": [k for k in ("dhcp", "arp", "mdns", "ssdp", "netbios") if k in r["info"]],
+                    "kinds": [k for k in ("dhcp", "dhcp6", "arp", "ndp", "mdns", "ssdp", "netbios", "neighbor", "chatter")
+                              if k in r["info"]],
                     "vendor": None if identify.is_private_mac(r["mac"]) else identify.vendor_for(r["mac"])})
     return jsonify({"ok": True, "enabled": passive.enabled(), "status": passive.status(), "devices": out})
+
+
+@app.route("/api/passive/nudge", methods=["POST"])
+def api_passive_nudge():
+    """Ask now: one round of prompted announcements (takes a few seconds)."""
+    if not passive.enabled() or not passive.status()["running"]:
+        return jsonify({"ok": False, "error": "Passive discovery isn't running."}), 409
+    return jsonify({"ok": True, "nudge": passive.nudge_now()})
 
 
 @app.route("/api/interfaces")

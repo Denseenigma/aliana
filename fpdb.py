@@ -210,6 +210,62 @@ def chatter_clues(ch):
     return clues, facts, old
 
 
+# ---------------------------------------------------------------- LISTEN: IPv6 + neighbor announcements
+
+def listen_clues(pv, mac=None):
+    """From passive.py's ndp / dhcp6 / neighbor records:
+    -> (clues [(type, score, why)], facts [str], hardware maker from the DHCPv6 ID or None)"""
+    clues, facts, duid_vendor = [], [], None
+    pv = pv or {}
+    nbr = pv.get("neighbor") or {}
+    caps = set(nbr.get("caps") or [])
+    proto = nbr.get("proto") or "LLDP"
+    what = " ".join(x for x in (nbr.get("manufacturer"), nbr.get("model")) if x)
+    if "phone" in caps or (nbr.get("med_class") or "").startswith("communication"):
+        clues.append(("phone", 92, f"announces itself as a phone ({proto}){': ' + what if what else ''}"))
+    elif "access point" in caps:
+        clues.append(("network", 90, f"announces itself as a wireless access point ({proto})"))
+    elif caps & {"switch", "router", "repeater"} or (nbr.get("med_class") or "").startswith("network"):
+        role = "router" if "router" in caps and "switch" not in caps else "switch"
+        clues.append(("network", 92, f"announces itself as a {role} ({proto})"))
+    if nbr:
+        bits = []
+        for x in (nbr.get("system_name"), what or None, (nbr.get("system_desc") or "")[:60] or None):
+            if x and not any(x.lower() in b.lower() or b.lower() in x.lower() for b in bits):
+                bits.append(x)
+            elif x and bits and len(x) > len(bits[-1]) and bits[-1].lower() in x.lower():
+                bits[-1] = x
+        if bits:
+            facts.append(f"{proto}: " + " · ".join(bits))
+        fw = nbr.get("firmware") or nbr.get("software")
+        if fw and not any(fw in b for b in bits):
+            facts.append(f"{proto}: firmware {nbr.get('firmware') or nbr.get('software')}")
+    n6 = pv.get("ndp") or {}
+    if n6.get("router"):
+        clues.append(("network", 70, "sends IPv6 router advertisements"))
+    if pv.get("ip6"):
+        how = "addresses from its MAC (EUI-64)" if n6.get("eui64") and not n6.get("private_addrs") else \
+              "private / random addresses" if n6.get("private_addrs") else "link-local only"
+        facts.append(f"IPv6: {len(pv['ip6'])} address{'es' if len(pv['ip6']) != 1 else ''}, {how}")
+    if n6.get("groups"):
+        facts.append("listens for: " + ", ".join(n6["groups"]))
+    d6 = pv.get("dhcp6") or {}
+    if d6.get("vendor_en") == 311:
+        clues.append(("windows", 82, "DHCPv6 vendor: Microsoft"))
+    if d6.get("duid_date"):
+        facts.append(f"DHCPv6 ID created {d6['duid_date']} (usually when the OS was installed)")
+    dm = d6.get("duid_mac") or n6.get("eui64_mac")
+    if dm and dm != (mac or "").upper():
+        try:
+            import identify
+            if not identify.is_private_mac(dm):
+                duid_vendor = identify.vendor_for(dm)
+        except Exception:
+            duid_vendor = None
+        facts.append(f"hardware MAC {dm} in its IPv6 traffic" + (f" ({duid_vendor})" if duid_vendor else ""))
+    return clues, facts, duid_vendor
+
+
 # ---------------------------------------------------------------- mismatches
 
 def mismatch(vendor_type, vendor, fp_type, fp_score, compatible):
