@@ -13,6 +13,7 @@ aliana/
   scanner.py           nmap wrapper + SQLite storage
   wifi.py              Wi-Fi management via NetworkManager (nmcli)
   qr.py                tiny built-in QR code generator (no dependencies)
+  auth.py              access control: authenticator-app sign-in, recovery codes, erase & reset
   requirements.txt
   aliana.service       systemd unit (expects the repo cloned at ~/aliana)
   setup.sh             one-time/after-pull install steps (Pi only)
@@ -21,6 +22,7 @@ aliana/
     index.html          full dashboard (browser)
     kiosk.html          compact control screen for the 480x320 display
     wifi.html           Wi-Fi setup page (desktop + phone)
+    auth.html           sign in / set up authenticator / erase & reset
   kiosk/
     .xinitrc             launches Chromium in kiosk mode on boot
     bash_profile_snippet.sh   autostarts X on the console login
@@ -318,6 +320,39 @@ Deep scans aren't offered -- too much traffic for a whole subnet.
 
 Profiles are defined in `PROFILES` at the top of `scanner.py`.
 
+## Access control (authenticator app)
+
+There's no password: browsers unlock Aliana with the **6-digit code from an
+authenticator app** on your phone (Microsoft / Google Authenticator, Authy,
+1Password, Bitwarden... any TOTP app). A browser stays signed in for 12 hours;
+**Lock** in the header signs out. The Pi's own screen (requests from the Pi
+itself) never asks.
+
+**First run:** opening Aliana in a browser goes to the setup page. It asks for
+a **pairing code shown on the Pi's screen** (proof you have the device in
+hand), then shows a QR code to scan with the app, then shows **10 recovery
+codes** once -- save them. No screen? The code is also in
+`journalctl -u aliana | grep pairing`.
+
+**Lost the phone:** "Use a recovery code" on the sign-in page. Each code works
+once. Settings > Access control can make new recovery codes or move the
+authenticator to a new phone (both need a current code).
+
+**Lost the phone and the recovery codes:** **Erase & reset** on the sign-in
+page. It shows a reset code on the Pi's screen; enter it and type ERASE. This
+permanently erases the RMM connection and credentials (and the vault key),
+all scan history, the device inventory and the queue, then goes straight to
+setting up a new authenticator. Scan settings, exclusions, never-probe ports
+and Wi-Fi networks are kept so the Pi stays reachable. Over SSH, the same
+thing: `./venv/bin/python3 auth.py --reset`, then restart the service.
+
+The authenticator secret, recovery-code hashes and the session-signing key
+live in `~/.config/aliana/` (owner-only, outside the repo). Codes are
+single-use, and wrong guesses are rate-limited per address.
+
+Note: anything on the Pi that connects to Aliana from 127.0.0.1 counts as
+"the Pi's screen", so don't put a reverse proxy on the Pi in front of it.
+
 ## Wi-Fi setup
 
 Open **Wi-Fi** from the dashboard header (`/wifi`) -- e.g. from your
@@ -328,7 +363,8 @@ installs a polkit rule so the service user is allowed to make them.
 
 On the onboard screen, the **WI-FI** button shows the current network,
 signal and address, plus a QR code that opens the Wi-Fi page on a phone
-(the phone needs to be on a network that can reach the Pi).
+(the phone needs to be on a network that can reach the Pi, and signs in with
+the authenticator code first).
 
 If Wi-Fi shows as off or `nmcli device` lists wlan0 as "unavailable", the
 radio is blocked or the Wi-Fi country isn't set yet (use your country code):

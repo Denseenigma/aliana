@@ -3,6 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+{% include "_lock.js.html" %}
 <title>Aliana report &middot; {{ scan.subnet }} &middot; {{ scan.finished_at | when }}</title>
 <style>
   /* Printable summary: light page so it prints cleanly, Aliana accents. */

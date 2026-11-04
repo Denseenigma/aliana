@@ -3,6 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+{% include "_lock.js.html" %}
 <title>Aliana</title>
 <script>if (/[?&]mirror=1/.test(location.search)) document.documentElement.className += " mirror";</script>
 <!--
@@ -609,6 +610,35 @@
   }
   .stamp-sub { font-family: var(--cond); font-size: 17px; letter-spacing: 0.16em; }
 
+  /* --- Pairing / reset code (auth.py): only ever on the Pi's own screen --- */
+  .pairing {
+    --c: var(--orange);
+    position: fixed;
+    top: var(--inset-top); right: var(--inset-right); bottom: var(--inset-bottom); left: var(--inset-left);
+    z-index: 35;
+    display: none;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    padding: 30px 16px;
+    background: #000;
+    color: var(--c);
+    text-align: center;
+  }
+  .pairing.reset { --c: var(--red); }
+  .pairing.show { display: flex; }
+  .pairing::before, .pairing::after {
+    content: ""; position: absolute; left: 0; right: 0; height: 14px;
+    background: repeating-linear-gradient(-45deg, var(--c) 0 10px, transparent 10px 20px);
+  }
+  .pairing::before { top: 6px; }
+  .pairing::after { bottom: 6px; }
+  .pair-label { font-family: var(--cond); font-size: 15px; letter-spacing: 0.22em; }
+  .pair-code { font-family: var(--title); font-size: 84px; line-height: 84px; letter-spacing: 0.08em; text-shadow: 0 0 12px var(--c); }
+  .pair-msg { font-family: var(--cond); font-size: 12px; letter-spacing: 0.1em; color: var(--text); max-width: 420px; line-height: 1.35; }
+  .pairing button { margin-top: 8px; }
+
   /* --- Boot sequence --- */
   .boot {
     position: fixed;
@@ -741,6 +771,13 @@
 </div>
 
 <div id="crt"></div>
+
+<section class="pairing" id="pairing">
+  <div class="pair-label" id="pair-label">PAIRING CODE</div>
+  <div class="pair-code" id="pair-code"></div>
+  <div class="pair-msg" id="pair-msg"></div>
+  <button id="pair-cancel" class="secondary" type="button" hidden>CANCEL RESET</button>
+</section>
 
 <section class="picker" id="picker">
   <div class="wifi-head">
@@ -964,7 +1001,29 @@
     $("timer-prof").style.color = s.profile === "discovery" ? "var(--cyan)" : s.profile === "deep" ? "var(--red)" : "";
   }
 
+  var pairShown = "";
+  function renderPairing(p) {
+    // Only touch the DOM when the code changes (SPI screen: avoid redraws)
+    var key = p ? p.reason + ":" + p.code : "";
+    if (key === pairShown) return;
+    pairShown = key;
+    var el = $("pairing");
+    if (!p) { el.className = "pairing"; return; }
+    var reset = p.reason === "reset";
+    el.className = "pairing show" + (reset ? " reset" : "");
+    $("pair-label").textContent = reset ? "ERASE & RESET CODE" : "PAIRING CODE";
+    $("pair-code").textContent = p.code;
+    $("pair-msg").textContent = reset
+      ? "SOMEONE ASKED TO ERASE THIS ALIANA. ONLY USE THIS CODE IF IT WAS YOU: IT ERASES RMM CREDENTIALS AND SCAN HISTORY."
+      : "ENTER THIS CODE IN YOUR BROWSER TO SET UP THE AUTHENTICATOR APP ON YOUR PHONE.";
+    $("pair-cancel").hidden = !reset;
+  }
+  $("pair-cancel").addEventListener("click", function () {
+    fetch("/api/auth/reset/cancel", { method: "POST" }).then(poll, poll);
+  });
+
   function apply(data) {
+    if (data.pairing !== undefined) renderPairing(data.pairing);
     maybeStamp(data);
     waveKick(data);
     state = data;

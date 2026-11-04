@@ -1,0 +1,22 @@
+<script>
+/* Signed out (session expired, or the authenticator was replaced elsewhere):
+   any API call answers 401 {locked: true} -> go to the sign-in page. */
+(function () {
+  var f = window.fetch;
+  if (!f || f._aliana) return;
+  window.fetch = function () {
+    return f.apply(this, arguments).then(function (r) {
+      if (r.status === 401) {
+        r.clone().json().then(function (d) {
+          if (d && d.locked) {
+            var w = window.top || window;
+            w.location.href = "/login?next=" + encodeURIComponent(w.location.pathname + w.location.search);
+          }
+        }).catch(function () {});
+      }
+      return r;
+    });
+  };
+  window.fetch._aliana = true;
+})();
+</script>

@@ -3,6 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+{% include "_lock.js.html" %}
 <title>Aliana Devices</title>
 <style>
 {% include "_theme.css.html" %}
@@ -81,7 +82,7 @@
     </svg>
     Aliana <small>devices</small>
   </h1>
-  <nav class="nav"><a href="/">Dashboard</a><a href="/queue">Queue</a><a href="/devices" class="on">Devices</a><a href="/settings">Settings</a><a href="/wifi">Wi-Fi</a></nav>
+  <nav class="nav"><a href="/">Dashboard</a><a href="/queue">Queue</a><a href="/devices" class="on">Devices</a><a href="/settings">Settings</a><a href="/wifi">Wi-Fi</a><a href="/logout" style="color:var(--red)" title="Sign out of Aliana (the Pi screen stays unlocked)">Lock</a></nav>
   <div class="controls">
     <span class="kv">History <b>{% if span.count %}{{ span.first | when }} &ndash; {{ span.last | when }}{% else %}none yet{% endif %}</b></span>
     <span class="kv">Scans <b>{{ span.count }}{% if span.imported %} &middot; {{ span.imported }} imported{% endif %}</b></span>

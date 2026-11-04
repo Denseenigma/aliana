@@ -12,7 +12,7 @@ import socket
 import subprocess
 import threading
 import time
-from flask import Flask, render_template, jsonify, redirect, url_for, request, Response
+from flask import Flask, render_template, jsonify, redirect, url_for, request, Response, session
 
 import scanner
 import insights
@@ -21,11 +21,16 @@ import identify
 import rmm
 import wifi
 import qr
+import auth
+import vault
 
 PORT = 8080
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 64 * 1024 * 1024   # history imports
+app.secret_key = auth.session_key()
+app.config.update(SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE="Lax",
+                  PERMANENT_SESSION_LIFETIME=datetime.timedelta(hours=auth.SESSION_HOURS))
 
 
 @app.template_filter("when")
@@ -56,6 +61,217 @@ def ago(iso):
     if s < 86400:
         return f"{int(s // 3600)} h ago"
     return f"{int(s // 86400)} d ago"
+
+
+# ---------------------------------------------------------------- access control (auth.py)
+#
+# Every page and API needs a signed-in browser, except the Pi's own screen
+# (requests from the Pi itself) and the sign-in / setup / reset pages.
+
+_PUBLIC_ENDPOINTS = {
+    "static", "login_page", "setup_page", "reset_page", "logout",
+    "api_auth_login", "api_auth_pair", "api_auth_enroll", "api_auth_qr",
+    "api_auth_reset_request", "api_auth_reset",
+}
+
+
+def _is_local():
+    return request.remote_addr in ("127.0.0.1", "::1")
+
+
+def _signed_in():
+    ep = session.get("ep")
+    return bool(ep) and ep == auth.epoch()
+
+
+def _sign_in():
+    session.clear()
+    session.permanent = True
+    session["ep"] = auth.epoch()
+
+
+def _safe_next(target):
+    target = target or "/"
+    return target if target.startswith("/") and not target.startswith("//") else "/"
+
+
+@app.before_request
+def _require_sign_in():
+    if _is_local() or request.endpoint in _PUBLIC_ENDPOINTS or _signed_in():
+        return None
+    if request.path.startswith("/api/") or request.method != "GET":
+        return jsonify({"ok": False, "locked": True, "error": "Aliana is locked. Sign in again."}), 401
+    page = "login_page" if auth.is_configured() else "setup_page"
+    nxt = request.full_path.rstrip("?")
+    return redirect(url_for(page, next=nxt) if nxt not in ("", "/") else url_for(page))
+
+
+@app.after_request
+def _no_cache_auth(resp):
+    if request.endpoint in _PUBLIC_ENDPOINTS and request.endpoint != "static":
+        resp.headers["Cache-Control"] = "no-store"
+    return resp
+
+
+def _auth_error(e, status=400):
+    return jsonify({"ok": False, "error": str(e)}), status
+
+
+@app.route("/login")
+def login_page():
+    if not auth.is_configured():
+        return redirect(url_for("setup_page"))
+    if _signed_in():
+        return redirect(_safe_next(request.args.get("next")))
+    return render_template("auth.html", mode="login", next=_safe_next(request.args.get("next")),
+                           hostname=socket.gethostname())
+
+
+@app.route("/logout")
+def logout():
+    session.clear()
+    return redirect(url_for("login_page") if auth.is_configured() else url_for("setup_page"))
+
+
+@app.route("/setup")
+def setup_page():
+    """New authenticator: first run, after an erase, or replacing the phone."""
+    enrolling = auth.pending_secret(session.get("enroll")) is not None
+    if auth.is_configured() and not enrolling:
+        return redirect(url_for("settings_page") if _signed_in() else url_for("login_page"))
+    if not enrolling:
+        auth.request_pairing("setup")
+    return render_template("auth.html", mode="setup", step="enroll" if enrolling else "pair",
+                           replace=auth.is_configured(), next="/", hostname=socket.gethostname())
+
+
+@app.route("/reset")
+def reset_page():
+    if not auth.is_configured():
+        return redirect(url_for("setup_page"))
+    return render_template("auth.html", mode="reset", next="/", hostname=socket.gethostname())
+
+
+@app.route("/api/auth/login", methods=["POST"])
+def api_auth_login():
+    code = (request.get_json(silent=True) or {}).get("code") or ""
+    try:
+        r = auth.login(code, request.remote_addr)
+    except auth.AuthError as e:
+        return _auth_error(e, 401)
+    _sign_in()
+    return jsonify({"ok": True, **r})
+
+
+@app.route("/api/auth/pair", methods=["POST"])
+def api_auth_pair():
+    """First-run setup, step 1: the pairing code from the Pi screen."""
+    if auth.is_configured():
+        return _auth_error("An authenticator is already set up.")
+    code = (request.get_json(silent=True) or {}).get("code") or ""
+    try:
+        auth.check_pairing(code, "setup", request.remote_addr)
+    except auth.AuthError as e:
+        return _auth_error(e, 401)
+    session["enroll"] = auth.start_enrollment()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/auth/enroll", methods=["GET", "POST"])
+def api_auth_enroll():
+    """GET: the new secret (for typing in by hand). POST {code}: confirm it."""
+    token = session.get("enroll")
+    secret = auth.pending_secret(token)
+    if not secret:
+        return _auth_error("This setup expired. Start again.", 410)
+    if request.method == "GET":
+        return jsonify({"ok": True, "secret": auth.pretty_secret(secret),
+                        "account": f"{auth.ISSUER} ({socket.gethostname()})"})
+    code = (request.get_json(silent=True) or {}).get("code") or ""
+    try:
+        codes = auth.finish_enrollment(token, code, request.remote_addr)
+    except auth.AuthError as e:
+        return _auth_error(e)
+    _sign_in()
+    return jsonify({"ok": True, "recovery_codes": codes})
+
+
+@app.route("/api/auth/qr.svg")
+def api_auth_qr():
+    secret = auth.pending_secret(session.get("enroll"))
+    if not secret:
+        return Response(status=404)
+    svg = qr.svg(auth.otpauth_uri(secret, socket.gethostname()))
+    return Response(svg, mimetype="image/svg+xml", headers={"Cache-Control": "no-store"})
+
+
+@app.route("/api/auth/reset/request", methods=["POST"])
+def api_auth_reset_request():
+    """Lost access: show a reset code on the Pi screen (nothing is erased yet)."""
+    if not auth.is_configured():
+        return _auth_error("Nothing to reset.")
+    auth.request_pairing("reset")
+    return jsonify({"ok": True})
+
+
+@app.route("/api/auth/reset", methods=["POST"])
+def api_auth_reset():
+    """Lost access, step 2: the code from the Pi screen + typed ERASE.
+    Erases the sensitive data, then goes straight on to a new authenticator."""
+    data = request.get_json(silent=True) or {}
+    if (data.get("confirm") or "").strip().upper() != "ERASE":
+        return _auth_error('Type ERASE to confirm.')
+    try:
+        auth.check_pairing(data.get("code") or "", "reset", request.remote_addr)
+    except auth.AuthError as e:
+        return _auth_error(e, 401)
+    _erase_everything_sensitive()
+    session.clear()
+    session["enroll"] = auth.start_enrollment()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/auth/reset/cancel", methods=["POST"])
+def api_auth_reset_cancel():
+    """CANCEL on the Pi screen's reset-code overlay."""
+    auth.cancel_pairing("reset")
+    return jsonify({"ok": True})
+
+
+def _erase_everything_sensitive():
+    scanner.cancel_all_queued()
+    scanner.stop_scan(wait=10)
+    auth.erase_sensitive(scanner.DB_PATH, vault.key_path())
+    rmm.forget_runtime_state()
+
+
+@app.route("/api/auth/status")
+def api_auth_status():
+    return jsonify({"ok": True, **auth.status()})
+
+
+@app.route("/api/auth/recovery", methods=["POST"])
+def api_auth_recovery():
+    """New recovery codes (the old ones stop working). Needs a fresh code."""
+    code = (request.get_json(silent=True) or {}).get("code") or ""
+    try:
+        auth.verify_current(code, request.remote_addr)
+        codes = auth.new_recovery_codes()
+    except auth.AuthError as e:
+        return _auth_error(e, 401)
+    return jsonify({"ok": True, "recovery_codes": codes})
+
+
+@app.route("/api/auth/replace", methods=["POST"])
+def api_auth_replace():
+    """New phone: confirm with the current authenticator, then set up the new one."""
+    code = (request.get_json(silent=True) or {}).get("code") or ""
+    try:
+        auth.verify_current(code, request.remote_addr)
+    except auth.AuthError as e:
+        return _auth_error(e, 401)
+    session["enroll"] = auth.start_enrollment(replace=True)
+    return jsonify({"ok": True, "next": url_for("setup_page")})
 
 
 @app.route("/")
@@ -256,7 +472,10 @@ def _kiosk_state():
 
 @app.route("/api/kiosk")
 def api_kiosk():
-    return jsonify(_kiosk_state())
+    state = _kiosk_state()
+    # The pairing code only ever goes to the Pi's own screen
+    state["pairing"] = auth.pairing_display() if _is_local() else None
+    return jsonify(state)
 
 
 @app.route("/api/scan", methods=["POST"])

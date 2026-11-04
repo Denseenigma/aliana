@@ -3,6 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+{% include "_lock.js.html" %}
 <title>Aliana Settings</title>
 <style>
   /* Fonts: "Aliana Title" / "Aliana Sans", SIL OFL 1.1 -- see static/fonts/LICENSE-*.txt */
@@ -303,7 +304,7 @@
     </svg>
     Aliana <small>settings</small>
   </h1>
-  <nav class="nav"><a href="/">Dashboard</a><a href="/queue">Queue</a><a href="/devices">Devices</a><a href="/settings" class="on">Settings</a><a href="/wifi">Wi-Fi</a></nav>
+  <nav class="nav"><a href="/">Dashboard</a><a href="/queue">Queue</a><a href="/devices">Devices</a><a href="/settings" class="on">Settings</a><a href="/wifi">Wi-Fi</a><a href="/logout" style="color:var(--red)" title="Sign out of Aliana (the Pi screen stays unlocked)">Lock</a></nav>
   <div class="controls">
     <span class="kv">Changes save as you make them</span>
     <span class="spacer"></span>
@@ -375,6 +376,27 @@
       Pi screen, Queue page and auto-scan.</p>
     <div class="guard-rows" id="guard-rows"></div>
     <div class="readout" id="guard-now"></div>
+  </section>
+
+  <section class="panel">
+    <div class="panel-head"><h2>Access control</h2><span class="kv" id="auth-kv"></span></div>
+    <p class="desc">Browsers unlock Aliana with the <b>6-digit code from your authenticator app</b> (or a single-use
+      <b>recovery code</b>) and stay signed in for 12 hours. The Pi's own screen never asks.
+      If both are lost, <b>Erase &amp; reset</b> on the sign-in page wipes the RMM credentials and scan history and lets
+      you set up again; it needs a code shown on the Pi's screen.</p>
+    <div class="readout" id="auth-readout"></div>
+    <div class="add" style="margin-top:10px">
+      <input id="auth-code" inputmode="numeric" autocomplete="one-time-code" maxlength="7" placeholder="Current code" style="width:130px">
+      <button type="button" class="ghost sm" id="auth-rc">New recovery codes</button>
+      <button type="button" class="ghost sm" id="auth-replace">Replace authenticator</button>
+      <a href="/logout"><button type="button" class="red sm">Lock now</button></a>
+    </div>
+    <div class="hint" id="auth-msg"></div>
+    <div id="auth-codes" hidden style="margin-top:10px">
+      <div class="readout" id="auth-codes-list" style="font-family:var(--mono);letter-spacing:0.08em;column-count:2;white-space:pre"></div>
+      <div class="add" style="margin-top:8px"><button type="button" class="ghost sm" id="auth-dl">Download .txt</button>
+        <span class="hint" style="margin:0">Save these now: they won't be shown again. The old codes no longer work.</span></div>
+    </div>
   </section>
 
   <section class="panel rmm-panel">
@@ -693,6 +715,45 @@
       renderFields(); renderStatus();
     });
   });
+  // ---------- access control
+  (function () {
+    var codes = [];
+    function amsg(t, bad) { $("auth-msg").textContent = t || ""; $("auth-msg").style.color = bad ? "var(--red)" : ""; }
+    function loadAuth() {
+      fetch("/api/auth/status", { cache: "no-store" }).then(function (r) { return r.json(); }).then(function (d) {
+        if (!d.configured) { $("auth-readout").textContent = "No authenticator set up."; return; }
+        var low = d.recovery_left <= 3;
+        $("auth-kv").innerHTML = "Recovery codes <b" + (low ? ' style="color:var(--red)"' : "") + ">" + d.recovery_left + " / " + d.recovery_total + "</b>";
+        $("auth-readout").textContent = "Authenticator set up " + String(d.created || "").replace("T", " ") +
+          (low ? " \u00b7 running low on recovery codes \u2014 make new ones" : "");
+      });
+    }
+    function code() { return $("auth-code").value.replace(/\D/g, ""); }
+    $("auth-rc").addEventListener("click", function () {
+      if (code().length !== 6) { amsg("Enter the current 6-digit code from your authenticator first.", true); $("auth-code").focus(); return; }
+      post("/api/auth/recovery", { code: code() }).then(function (d) {
+        $("auth-code").value = "";
+        if (!d.ok) { amsg(d.error, true); return; }
+        codes = d.recovery_codes; amsg("");
+        $("auth-codes-list").textContent = codes.join("\n");
+        $("auth-codes").hidden = false; loadAuth();
+      });
+    });
+    $("auth-dl").addEventListener("click", function () {
+      var a = document.createElement("a");
+      a.href = URL.createObjectURL(new Blob(["Aliana recovery codes \u2014 made " + new Date().toLocaleString() +
+        "\nEach code works once.\n\n" + codes.join("\n") + "\n"], { type: "text/plain" }));
+      a.download = "aliana-recovery-codes.txt"; document.body.appendChild(a); a.click(); a.remove();
+    });
+    $("auth-replace").addEventListener("click", function () {
+      if (code().length !== 6) { amsg("Enter the current 6-digit code from your authenticator first.", true); $("auth-code").focus(); return; }
+      post("/api/auth/replace", { code: code() }).then(function (d) {
+        if (!d.ok) { $("auth-code").value = ""; amsg(d.error, true); return; }
+        location.href = d.next;
+      });
+    });
+    loadAuth();
+  })();
   load();
 })();
 </script>

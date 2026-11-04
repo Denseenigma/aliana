@@ -3,6 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+{% include "_lock.js.html" %}
 <title>Aliana Recon</title>
 <style>
   /* Fonts: "Aliana Title" (condensed Noto Serif CJK JP Black) and "Aliana Sans"
@@ -567,7 +568,7 @@
     </svg>
     Aliana <small>network recon</small>
   </h1>
-  <nav class="nav"><a href="/" class="on">Dashboard</a><a href="/queue">Queue<span class="qbadge" id="qbadge" {% if not (status.queue.queued + (1 if status.queue.current else 0)) %}hidden{% endif %}>{{ (status.queue.queued + (1 if status.queue.current else 0)) }}</span></a><a href="/devices">Devices</a><a href="/settings">Settings</a><a href="/wifi">Wi-Fi</a><button type="button" class="screen-btn" id="mirror-open-btn" title="Live, interactive view of the Pi's onboard screen"><span class="dot"></span>Pi screen</button></nav>
+  <nav class="nav"><a href="/" class="on">Dashboard</a><a href="/queue">Queue<span class="qbadge" id="qbadge" {% if not (status.queue.queued + (1 if status.queue.current else 0)) %}hidden{% endif %}>{{ (status.queue.queued + (1 if status.queue.current else 0)) }}</span></a><a href="/devices">Devices</a><a href="/settings">Settings</a><a href="/wifi">Wi-Fi</a><a href="/logout" style="color:var(--red)" title="Sign out of Aliana (the Pi screen stays unlocked)">Lock</a><button type="button" class="screen-btn" id="mirror-open-btn" title="Live, interactive view of the Pi's onboard screen"><span class="dot"></span>Pi screen</button></nav>
 
   <div class="controls">
     <div class="state {{ 'running' if status.running else '' }}">

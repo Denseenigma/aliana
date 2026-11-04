@@ -1,0 +1,341 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Aliana &middot; {{ {'login': 'Locked', 'setup': 'Set up authenticator', 'reset': 'Erase & reset'}[mode] }}</title>
+<style>
+{% include "_theme.css.html" %}
+  body { min-height: 100vh; display: flex; align-items: flex-start; justify-content: center; padding-top: 7vh; }
+  .wrap { width: 100%; max-width: 560px; }
+  header { margin-bottom: 26px; }
+  .lockline { flex-basis: 100%; display: flex; align-items: center; gap: 10px; }
+  .lockhex {
+    width: 22px; height: 19px; flex-shrink: 0; background: var(--red);
+    clip-path: polygon(25% 0, 75% 0, 100% 50%, 75% 100%, 25% 100%, 0 50%);
+    animation: blink 1.6s steps(1) infinite;
+  }
+  .lockline.open .lockhex { background: var(--green); animation: none; }
+  .lockline b { font-family: var(--title); font-weight: normal; font-size: 1.5rem; color: var(--red); letter-spacing: 0.06em; text-transform: uppercase; }
+  .lockline.open b { color: var(--green); }
+  .lockline .kv { margin-left: auto; }
+  p.desc { margin: 0 0 14px; line-height: 1.5; font-size: 0.95rem; color: var(--text); letter-spacing: 0.02em; }
+  p.desc b { color: var(--accent); font-weight: inherit; }
+  .code {
+    width: 100%; font-family: var(--title); font-size: 2.6rem; text-align: center; letter-spacing: 0.35em;
+    padding: 12px 10px 8px 0.35em; color: var(--accent); border: 1px solid var(--accent); background: #000;
+  }
+  .code.rc { font-family: var(--mono); font-size: 1.6rem; letter-spacing: 0.12em; text-transform: uppercase; }
+  .code:focus { outline: none; box-shadow: 0 0 0 1px var(--accent), 0 0 18px rgba(255, 122, 0, 0.35); }
+  .row { display: flex; align-items: center; flex-wrap: wrap; gap: 10px 14px; margin-top: 14px; }
+  .row .spacer { flex: 1; }
+  .linkbtn { background: none; border: none; color: var(--muted); font-family: var(--sans); font-size: 0.82rem;
+             letter-spacing: 0.1em; text-transform: uppercase; padding: 4px 0; clip-path: none; cursor: pointer;
+             text-decoration: underline; text-underline-offset: 3px; }
+  .linkbtn:hover { background: none; color: var(--accent); }
+  .linkbtn.red { color: var(--red); box-shadow: none; }
+  .linkbtn.red:hover { background: none; color: #ff7070; }
+  .step { display: none; }
+  .step.on { display: block; }
+  .qrbox { display: flex; gap: 18px; align-items: center; flex-wrap: wrap; margin: 6px 0 14px; }
+  .qr { width: 196px; height: 196px; background: #fff; padding: 10px; flex-shrink: 0; }
+  .qr img { width: 100%; height: 100%; display: block; image-rendering: pixelated; }
+  .secret { font-family: var(--mono); font-size: 0.95rem; letter-spacing: 0.04em; color: var(--text); word-break: break-all;
+            border: 1px dashed var(--border); padding: 8px 10px; margin-top: 6px; user-select: all; }
+  .k { color: var(--muted); font-size: 0.72rem; letter-spacing: 0.14em; text-transform: uppercase; }
+  .codes { display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px 18px; margin: 4px 0 14px; padding: 14px 16px;
+           border: 1px solid var(--accent); background: #000; counter-reset: rc; }
+  .codes div { font-family: var(--mono); font-size: 1.1rem; letter-spacing: 0.08em; color: var(--text); }
+  .codes div::before { counter-increment: rc; content: counter(rc, decimal-leading-zero) "  "; color: var(--border); }
+  .check { display: flex; gap: 10px; align-items: flex-start; font-size: 0.9rem; color: var(--text); cursor: pointer; }
+  .check input { width: 18px; height: 18px; margin: 1px 0 0; accent-color: var(--accent); flex-shrink: 0; }
+  .warn { border: 1px solid var(--red); border-left: 6px solid var(--red); background: #140000; padding: 12px 14px;
+          margin-bottom: 16px; font-size: 0.9rem; line-height: 1.5; }
+  .warn h3 { margin: 0 0 6px; font-family: var(--title); font-weight: normal; color: var(--red); font-size: 1.3rem; letter-spacing: 0.05em; text-transform: uppercase; }
+  .warn ul { margin: 4px 0 8px; padding-left: 18px; }
+  .warn li { margin: 2px 0; }
+  .keep { color: var(--green); }
+  .hazard { height: 10px; background: repeating-linear-gradient(-45deg, var(--red) 0 8px, #000 8px 16px); margin: -16px -18px 14px; }
+  input.confirm { width: 160px; font-family: var(--title); font-size: 1.3rem; letter-spacing: 0.2em; text-transform: uppercase; color: var(--red); border-color: var(--red); }
+  input.pair { font-size: 2rem; letter-spacing: 0.3em; }
+  .msg { margin-bottom: 14px; }
+  .mono { font-family: var(--mono); letter-spacing: 0; }
+  .apps { color: var(--muted); font-size: 0.82rem; letter-spacing: 0.03em; margin-top: 10px; }
+  @media print {
+    body { background: #fff; color: #000; padding: 0; }
+    header, .row, .desc, .msg, .panel-head { display: none !important; }
+    .panel { border: none; background: #fff; clip-path: none; }
+    .codes { border: 1px solid #000; background: #fff; }
+    .codes div { color: #000; }
+  }
+  @media (max-width: 520px) {
+    body { padding: 16px; padding-top: 4vh; }
+    .code { font-size: 2rem; }
+    .codes { grid-template-columns: 1fr; }
+    .qr { width: 100%; height: auto; aspect-ratio: 1; max-width: 260px; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>
+    <svg viewBox="0 0 120 100" fill="currentColor" aria-hidden="true">
+      <path d="M30 70 L10 85 L35 78 Z"/>
+      <ellipse cx="55" cy="60" rx="22" ry="14" transform="rotate(-10 55 60)"/>
+      <path d="M50 50 C40 20, 70 15, 85 35 C70 30, 55 35, 50 50 Z"/>
+      <circle cx="82" cy="45" r="11"/>
+      <path d="M92 45 L104 42 L92 50 Z"/>
+      <path d="M60 72 L58 88 M68 73 L70 89" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"/>
+    </svg>
+    Aliana <small>access control</small>
+  </h1>
+  <div class="lockline" id="lockline"><span class="lockhex"></span><b id="lockword">Locked</b><span class="kv">Unit <b>{{ hostname }}</b></span></div>
+</header>
+
+<div class="msg" id="msg"></div>
+
+{% if mode == "login" %}
+<!-- ============================== SIGN IN ============================== -->
+<section class="panel">
+  <div class="panel-head"><h2 id="login-title">Authenticator code</h2></div>
+  <div class="step on" id="s-totp">
+    <p class="desc">Open your authenticator app and enter the 6-digit code for <b>Aliana ({{ hostname }})</b>.</p>
+    <input class="code" id="totp" inputmode="numeric" autocomplete="one-time-code" maxlength="7" placeholder="000000" autofocus>
+  </div>
+  <div class="step" id="s-rc">
+    <p class="desc">Enter one of the recovery codes you saved when you set up the authenticator. Each code works <b>once</b>.</p>
+    <input class="code rc" id="rc" autocomplete="off" autocapitalize="characters" spellcheck="false" maxlength="11" placeholder="XXXXX-XXXXX">
+  </div>
+  <div class="row">
+    <button type="button" id="login-go">Unlock</button>
+    <span class="spacer"></span>
+    <button type="button" class="linkbtn" id="toggle-rc">Use a recovery code</button>
+  </div>
+  <div class="row" style="margin-top:18px">
+    <span class="hint" style="margin:0">Lost your phone <i>and</i> your recovery codes?</span>
+    <a class="linkbtn red" href="/reset">Erase &amp; reset</a>
+  </div>
+</section>
+{% endif %}
+
+{% if mode == "setup" %}
+<!-- ============================== SET UP ============================== -->
+<section class="panel">
+  <div class="step {{ 'on' if step == 'pair' }}" id="s-pair">
+    <div class="panel-head"><h2>Step 1 &middot; Pairing code</h2></div>
+    <p class="desc">{% if replace %}{% else %}No authenticator is set up on this Aliana yet.{% endif %}
+      To prove you have the device in hand, enter the <b>6-digit pairing code shown on the Pi's screen</b>.</p>
+    <input class="code" id="pair" inputmode="numeric" autocomplete="off" maxlength="7" placeholder="000000" autofocus>
+    <div class="row"><button type="button" id="pair-go">Continue</button></div>
+    <p class="hint">No screen? Over SSH, run <span class="mono">journalctl -u aliana | grep pairing</span> to see the code.</p>
+  </div>
+
+  <div class="step {{ 'on' if step == 'enroll' }}" id="s-enroll">
+    <div class="panel-head"><h2>{% if replace %}New authenticator{% else %}Step 2 &middot; Scan with your phone{% endif %}</h2></div>
+    <p class="desc">In your authenticator app, add an account and <b>scan this QR code</b>. Then enter the 6-digit code it shows.</p>
+    <div class="qrbox">
+      <div class="qr"><img id="qr" alt="Authenticator QR code"></div>
+      <div style="flex:1;min-width:200px">
+        <div class="k">Can't scan? Enter this key</div>
+        <div class="secret" id="secret">&hellip;</div>
+        <div class="k" style="margin-top:10px">Account</div>
+        <div style="font-size:0.9rem" id="account">&hellip;</div>
+        <div class="apps">Works with Microsoft Authenticator, Google Authenticator, Authy, 1Password, Bitwarden&hellip; (time-based, 6 digits, 30 s)</div>
+      </div>
+    </div>
+    <input class="code" id="first" inputmode="numeric" autocomplete="one-time-code" maxlength="7" placeholder="000000">
+    <div class="row"><button type="button" id="enroll-go">Confirm</button>
+      {% if replace %}<span class="spacer"></span><a class="linkbtn" href="/settings">Cancel &middot; keep the current one</a>{% endif %}</div>
+  </div>
+
+  <div class="step" id="s-codes">
+    <div class="panel-head"><h2>Recovery codes</h2></div>
+    <p class="desc">If you lose your phone, each of these codes unlocks Aliana <b>once</b>. Save them somewhere safe
+      (a password manager, or printed). <b>They won't be shown again.</b></p>
+    <div class="codes" id="codes"></div>
+    <div class="row" style="margin-top:0">
+      <button type="button" class="ghost sm" id="dl">Download .txt</button>
+      <button type="button" class="ghost sm" id="cp">Copy</button>
+      <button type="button" class="ghost sm" id="pr">Print</button>
+    </div>
+    <div class="row" style="margin-top:18px">
+      <label class="check"><input type="checkbox" id="saved-ok"> I've saved my recovery codes</label>
+      <span class="spacer"></span>
+      <button type="button" id="done" disabled>Enter Aliana</button>
+    </div>
+  </div>
+</section>
+{% endif %}
+
+{% if mode == "reset" %}
+<!-- ============================== ERASE & RESET ============================== -->
+<section class="panel live">
+  <div class="hazard"></div>
+  <div class="panel-head"><h2>Erase &amp; reset</h2></div>
+  <div class="warn">
+    <h3>Last resort</h3>
+    Use this only if you've lost <b>both</b> your authenticator and your recovery codes. It permanently erases:
+    <ul>
+      <li>RMM connection, API key and secret, and the encryption key that protected them</li>
+      <li>All scan history, the device inventory and identification results, the scan queue</li>
+    </ul>
+    <span class="keep">Kept:</span> scan settings, exclusions, never-probe ports, and Wi-Fi networks, so the Pi stays reachable.
+    Afterwards you'll set up a new authenticator straight away.
+  </div>
+  <div class="step on" id="s-r1">
+    <p class="desc">To prove you have the device in hand, Aliana will show a <b>reset code on the Pi's screen</b>.</p>
+    <div class="row"><button type="button" class="red" id="r-request">Show reset code on the Pi</button>
+      <span class="spacer"></span><a class="linkbtn" href="/login">Back to sign in</a></div>
+  </div>
+  <div class="step" id="s-r2">
+    <p class="desc">Enter the code from the Pi's screen, and type <b>ERASE</b> to confirm.</p>
+    <input class="code pair" id="r-code" inputmode="numeric" autocomplete="off" maxlength="7" placeholder="000000">
+    <div class="row">
+      <input class="confirm" id="r-confirm" placeholder="ERASE" autocomplete="off" spellcheck="false" maxlength="5">
+      <span class="spacer"></span>
+      <button type="button" class="stop" id="r-go">Erase &amp; reset</button>
+    </div>
+    <p class="hint">The reset code expires in 15 minutes. No screen? Over SSH: <span class="mono">journalctl -u aliana | grep pairing</span>,
+      or run <span class="mono">./venv/bin/python3 auth.py --reset</span> in the Aliana folder.</p>
+  </div>
+</section>
+{% endif %}
+
+</div>
+
+<script>
+(function () {
+  var $ = function (id) { return document.getElementById(id); };
+  var MODE = {{ mode | tojson }}, NEXT = {{ next | tojson }}, HOST = {{ hostname | tojson }};
+
+  function msg(text, ok) {
+    var m = $("msg");
+    m.textContent = text || "";
+    m.className = text ? "msg show" + (ok ? " ok" : "") : "msg";
+  }
+  function post(url, body) {
+    return fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body || {}) })
+      .then(function (r) { return r.json().catch(function () { return { ok: false, error: "Unexpected reply (" + r.status + ")." }; }); })
+      .catch(function () { return { ok: false, error: "Aliana didn't respond." }; });
+  }
+  function digits(el) { return el.value.replace(/\D/g, ""); }
+  function onEnter(el, fn) { el.addEventListener("keydown", function (e) { if (e.key === "Enter") fn(); }); }
+  // Auto-submit once 6 digits are in
+  function autoSix(el, fn) {
+    el.addEventListener("input", function () { if (digits(el).length === 6 && !el._sent) { el._sent = true; fn(); } });
+  }
+  function unlocked() { $("lockline").className = "lockline open"; $("lockword").textContent = "Unlocked"; }
+  function show(id) {
+    Array.prototype.forEach.call(document.querySelectorAll(".step"), function (s) { s.classList.toggle("on", s.id === id); });
+    var f = $(id).querySelector("input"); if (f) f.focus();
+  }
+
+  if (MODE === "login") {
+    var useRc = false;
+    function go() {
+      var el = useRc ? $("rc") : $("totp"), code = useRc ? el.value.trim() : digits(el);
+      if (!code) return;
+      $("login-go").disabled = true;
+      post("/api/auth/login", { code: code }).then(function (d) {
+        $("login-go").disabled = false; el._sent = false;
+        if (!d.ok) { msg(d.error); el.select(); return; }
+        unlocked();
+        if (d.method === "recovery") {
+          msg("Unlocked with a recovery code. " + d.recovery_left + " left — make new ones in Settings if you're running low.", true);
+          setTimeout(function () { location.href = NEXT; }, 2600);
+        } else location.href = NEXT;
+      });
+    }
+    $("login-go").addEventListener("click", go);
+    onEnter($("totp"), go); onEnter($("rc"), go); autoSix($("totp"), go);
+    $("toggle-rc").addEventListener("click", function () {
+      useRc = !useRc; msg("");
+      show(useRc ? "s-rc" : "s-totp");
+      $("login-title").textContent = useRc ? "Recovery code" : "Authenticator code";
+      this.textContent = useRc ? "Use the authenticator app" : "Use a recovery code";
+    });
+  }
+
+  if (MODE === "setup") {
+    var CODES = [];
+    function loadEnroll() {
+      $("qr").src = "/api/auth/qr.svg?t=" + Date.now();
+      fetch("/api/auth/enroll", { cache: "no-store" }).then(function (r) { return r.json(); }).then(function (d) {
+        if (!d.ok) { msg(d.error); setTimeout(function () { location.reload(); }, 2500); return; }
+        $("secret").textContent = d.secret; $("account").textContent = d.account;
+      });
+      show("s-enroll");
+    }
+    function pair() {
+      var c = digits($("pair")); if (c.length !== 6) return;
+      post("/api/auth/pair", { code: c }).then(function (d) {
+        $("pair")._sent = false;
+        if (!d.ok) { msg(d.error); $("pair").select(); return; }
+        msg(""); loadEnroll();
+      });
+    }
+    function enroll() {
+      var c = digits($("first")); if (c.length !== 6) return;
+      $("enroll-go").disabled = true;
+      post("/api/auth/enroll", { code: c }).then(function (d) {
+        $("enroll-go").disabled = false; $("first")._sent = false;
+        if (!d.ok) { msg(d.error); $("first").select(); return; }
+        msg(""); unlocked(); CODES = d.recovery_codes;
+        $("codes").innerHTML = CODES.map(function (c) { return "<div>" + c + "</div>"; }).join("");
+        show("s-codes");
+        window.onbeforeunload = function () { return "Save your recovery codes first."; };
+      });
+    }
+    function codesText() {
+      return "Aliana recovery codes — unit " + HOST + "\nMade " + new Date().toLocaleString() +
+        "\nEach code works once. Keep these somewhere safe.\n\n" + CODES.join("\n") + "\n";
+    }
+    if ($("s-enroll").classList.contains("on")) loadEnroll();
+    $("pair-go").addEventListener("click", pair); onEnter($("pair"), pair); autoSix($("pair"), pair);
+    $("enroll-go").addEventListener("click", enroll); onEnter($("first"), enroll); autoSix($("first"), enroll);
+    $("dl").addEventListener("click", function () {
+      var a = document.createElement("a");
+      a.href = URL.createObjectURL(new Blob([codesText()], { type: "text/plain" }));
+      a.download = "aliana-recovery-codes-" + HOST + ".txt";
+      document.body.appendChild(a); a.click(); a.remove();
+    });
+    $("cp").addEventListener("click", function () {
+      var b = this;
+      (navigator.clipboard ? navigator.clipboard.writeText(codesText()) : Promise.reject()).then(function () {
+        b.textContent = "Copied"; setTimeout(function () { b.textContent = "Copy"; }, 1500);
+      }, function () { msg("Copy isn't available here — use Download instead."); });
+    });
+    $("pr").addEventListener("click", function () { window.print(); });
+    $("saved-ok").addEventListener("change", function () { $("done").disabled = !this.checked; });
+    $("done").addEventListener("click", function () { window.onbeforeunload = null; location.href = NEXT; });
+  }
+
+  if (MODE === "reset") {
+    $("r-request").addEventListener("click", function () {
+      var b = this; b.disabled = true;
+      post("/api/auth/reset/request").then(function (d) {
+        b.disabled = false;
+        if (!d.ok) { msg(d.error); return; }
+        msg("A reset code is now showing on the Pi's screen.", true); show("s-r2");
+      });
+    });
+    function reset() {
+      var c = digits($("r-code"));
+      if (c.length !== 6) { msg("Enter the 6-digit code from the Pi screen."); return; }
+      if ($("r-confirm").value.trim().toUpperCase() !== "ERASE") { msg("Type ERASE to confirm."); $("r-confirm").focus(); return; }
+      $("r-go").disabled = true; msg("Erasing…", true);
+      post("/api/auth/reset", { code: c, confirm: "ERASE" }).then(function (d) {
+        $("r-go").disabled = false;
+        if (!d.ok) { msg(d.error); return; }
+        location.href = "/setup";
+      });
+    }
+    $("r-go").addEventListener("click", reset); onEnter($("r-confirm"), reset);
+  }
+})();
+</script>
+</body>
+</html>

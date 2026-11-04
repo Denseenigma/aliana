@@ -319,6 +319,11 @@ def maybe_sync_after(job):
 _cache = {}
 
 
+def forget_runtime_state():
+    """After auth.erase_sensitive(): drop anything still held in memory."""
+    _cache.clear()
+
+
 def _index():
     """(by_mac, by_hostname) for the active provider, cached until next sync."""
     key = get_provider_key()
