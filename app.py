@@ -474,8 +474,25 @@ def _kiosk_state():
 def api_kiosk():
     state = _kiosk_state()
     # The pairing code only ever goes to the Pi's own screen
-    state["pairing"] = auth.pairing_display() if _is_local() else None
+    pairing = auth.pairing_display() if _is_local() else None
+    if pairing and pairing["reason"] == "setup":
+        pairing["urls"] = _pairing_urls()
+    state["pairing"] = pairing
     return jsonify(state)
+
+
+def _pairing_urls():
+    """Addresses to type into a browser for first-time setup, most useful
+    first (Wi-Fi, wired, then the USB gadget link)."""
+    def kind(n):
+        return ("WI-FI", 0) if n.startswith("wl") else ("LAN", 1) if n.startswith(("eth", "en")) \
+            else ("USB", 3) if n.startswith("usb") else (n.upper(), 2)
+    out = []
+    for i in scanner.list_interfaces():
+        if i["ipv4"]:
+            label, order = kind(i["name"])
+            out.append((order, label, f"http://{i['ipv4'].split('/')[0]}:{PORT}"))
+    return [{"label": l, "url": u} for _, l, u in sorted(out)[:3]]
 
 
 @app.route("/api/scan", methods=["POST"])

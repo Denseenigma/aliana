@@ -638,6 +638,11 @@
   .pair-code { font-family: var(--title); font-size: 84px; line-height: 84px; letter-spacing: 0.08em; text-shadow: 0 0 12px var(--c); }
   .pair-msg { font-family: var(--cond); font-size: 12px; letter-spacing: 0.1em; color: var(--text); max-width: 420px; line-height: 1.35; }
   .pairing button { margin-top: 8px; }
+  .pair-urls { margin-top: 6px; display: grid; grid-template-columns: auto auto; gap: 2px 10px; justify-content: center; }
+  .pair-urls .k { font-family: var(--cond); font-size: 11px; letter-spacing: 0.16em; color: var(--muted); text-align: right; align-self: center; }
+  .pair-urls .u { text-transform: none; font-family: var(--cond); font-size: 17px; letter-spacing: 0.04em; color: var(--orange); text-align: left; font-variant-numeric: tabular-nums; }
+  .pair-urls .none { grid-column: 1 / -1; font-family: var(--cond); font-size: 12px; letter-spacing: 0.1em; color: var(--red); }
+  .pairing.has-urls .pair-code { font-size: 66px; line-height: 66px; }
 
   /* --- Boot sequence --- */
   .boot {
@@ -776,7 +781,8 @@
   <div class="pair-label" id="pair-label">PAIRING CODE</div>
   <div class="pair-code" id="pair-code"></div>
   <div class="pair-msg" id="pair-msg"></div>
-  <button id="pair-cancel" class="secondary" type="button" hidden>CANCEL RESET</button>
+  <div class="pair-urls" id="pair-urls"></div>
+  <button id="pair-cancel" class="secondary" type="button">CANCEL RESET</button>
 </section>
 
 <section class="picker" id="picker">
@@ -1001,24 +1007,33 @@
     $("timer-prof").style.color = s.profile === "discovery" ? "var(--cyan)" : s.profile === "deep" ? "var(--red)" : "";
   }
 
-  var pairShown = "";
+  var pairShown = "", pairHidden = "";
   function renderPairing(p) {
     // Only touch the DOM when the code changes (SPI screen: avoid redraws)
-    var key = p ? p.reason + ":" + p.code : "";
+    var urls = (p && p.urls) || [];
+    var key = p ? p.reason + ":" + p.code + ":" + urls.map(function (u) { return u.url; }).join(",") : "";
     if (key === pairShown) return;
     pairShown = key;
+    if (key && key === pairHidden) return;   // HIDE pressed for this code
     var el = $("pairing");
     if (!p) { el.className = "pairing"; return; }
     var reset = p.reason === "reset";
-    el.className = "pairing show" + (reset ? " reset" : "");
+    el.className = "pairing show" + (reset ? " reset" : " has-urls");
     $("pair-label").textContent = reset ? "ERASE & RESET CODE" : "PAIRING CODE";
     $("pair-code").textContent = p.code;
     $("pair-msg").textContent = reset
       ? "SOMEONE ASKED TO ERASE THIS ALIANA. ONLY USE THIS CODE IF IT WAS YOU: IT ERASES RMM CREDENTIALS AND SCAN HISTORY."
-      : "ENTER THIS CODE IN YOUR BROWSER TO SET UP THE AUTHENTICATOR APP ON YOUR PHONE.";
-    $("pair-cancel").hidden = !reset;
+      : "OPEN ALIANA IN A BROWSER AT ONE OF THESE ADDRESSES AND ENTER THIS CODE TO SET UP THE AUTHENTICATOR.";
+    $("pair-cancel").textContent = reset ? "CANCEL RESET" : "HIDE";
+    var esc = function (t) { return String(t).replace(/[&<>"]/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]; }); };
+    $("pair-urls").innerHTML = reset ? "" : urls.length
+      ? urls.map(function (u) { return '<div class="k">' + esc(u.label) + '</div><div class="u">' + esc(u.url) + "</div>"; }).join("")
+      : '<div class="none">NO NETWORK ADDRESS YET \u2014 CONNECT A NETWORK CABLE OR THE USB-C LINK</div>';
   }
   $("pair-cancel").addEventListener("click", function () {
+    if (!/reset/.test($("pairing").className)) {   // setup code: just hide it until it changes
+      pairHidden = pairShown; $("pairing").className = "pairing"; return;
+    }
     fetch("/api/auth/reset/cancel", { method: "POST" }).then(poll, poll);
   });
 
