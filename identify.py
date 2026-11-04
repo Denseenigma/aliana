@@ -546,7 +546,7 @@ def default_gateway():
 
 def _best_name(ident):
     """The most human name we found, and where it came from."""
-    for key, src in (("netbios", "NetBIOS"), ("dhcp", "DHCP"), ("mdns_instance", "mDNS"), ("mdns", "mDNS"),
+    for key, src in (("rmm", "RMM"), ("netbios", "NetBIOS"), ("dhcp", "DHCP"), ("mdns_instance", "mDNS"), ("mdns", "mDNS"),
                      ("upnp", "UPnP"), ("dns", "DNS")):
         v = ident.get("names", {}).get(key)
         if v:

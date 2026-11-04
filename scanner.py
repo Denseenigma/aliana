@@ -42,6 +42,18 @@ INTERVAL_CHOICES = sorted({300, 900, 1800, 3600, SCAN_INTERVAL_SECONDS})
 # fall back to unprivileged connect scans.
 NMAP_PRIVILEGED = os.environ.get("ALIANA_NMAP_PRIVILEGED", "1") == "1"
 
+# Local-network timing for port scans. Firewalled hosts (Windows Firewall,
+# most phones) silently drop probes, and nmap's default is to resend each
+# one up to 10 times with generous timeouts -- that's where most of a scan's
+# time goes. On a LAN a reply takes well under 100 ms, so one retry and
+# shorter timeouts lose nothing, and send *fewer* packets, not more.
+LAN_TIMING = ["--max-retries", "1", "--initial-rtt-timeout", "100ms", "--max-rtt-timeout", "400ms",
+              "--min-hostgroup", "32"]
+
+# Identification results are reused for a device seen again within this
+# long at the same address (no NetBIOS / mDNS / UPnP / web lookups needed).
+IDENT_CACHE_HOURS = 6
+
 # Scan profiles, gentlest first. "args" are the nmap options that define
 # what each one does; output/progress options are added in run_scan().
 PROFILES = {
@@ -50,7 +62,7 @@ PROFILES = {
         "description": "Who's on the network: host sweep only (ARP/ping), MAC vendor, "
                        "hostname. No port scan -- very low impact.",
         "short": "Who's here: host sweep, no port scan",
-        "args": ["-sn", "-T3"],
+        "args": ["-sn", "-T3", "--max-retries", "1"],
         "timeout": 300,
     },
     "standard": {
@@ -58,7 +70,7 @@ PROFILES = {
         "description": "Top 100 TCP ports with light version detection, normal timing, "
                        "rate-capped. Safe for most office networks.",
         "short": "Top 100 ports, light probing, rate-capped",
-        "args": ["-T3", "--top-ports", "100", "--max-rate", "300", "--host-timeout", "5m"],
+        "args": ["-T3", "--top-ports", "100", "--max-rate", "300", "--host-timeout", "5m"] + LAN_TIMING,
         # Stage 2 (service identification on the ports found open)
         "version_args": ["--version-light"],
         "version_host_timeout": "2m",
@@ -70,7 +82,8 @@ PROFILES = {
                        "top 1000 TCP ports, full version detection and OS "
                        "fingerprinting. Not offered for whole-network scans.",
         "short": "Top 1000 ports, full probing + OS guess",
-        "args": ["-T3", "--top-ports", "1000", "--max-rate", "300", "--host-timeout", "15m"],
+        "args": ["-T3", "--top-ports", "1000", "--max-rate", "300", "--host-timeout", "15m",
+                 "--max-retries", "2", "--max-rtt-timeout", "500ms"],
         "version_args": [],
         "version_host_timeout": "5m",
         # Only used when nmap has raw sockets (OS detection needs them).
@@ -507,14 +520,90 @@ _ALWAYS_STOP = threading.Event()
 _ALWAYS_STOP.set()
 
 
-def _identify_devices(hosts, scope, interface, enabled=True):
+def _recent_idents(macs, hours=IDENT_CACHE_HOURS):
+    """{MAC: (ip, ident, finished_at)} -- the latest identification of each
+    MAC within `hours` that actually found something."""
+    if not macs:
+        return {}
+    since = (datetime.datetime.now() - datetime.timedelta(hours=hours)).isoformat()
+    out = {}
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        macs = sorted({m.upper() for m in macs})
+        for i in range(0, len(macs), 500):
+            chunk = macs[i:i + 500]
+            q = ",".join("?" * len(chunk))
+            for mac, ip, ident, fin in conn.execute(
+                    f"SELECT UPPER(h.mac), h.ip, h.ident, s.finished_at FROM hosts h JOIN scans s ON s.id = h.scan_id "
+                    f"WHERE UPPER(h.mac) IN ({q}) AND s.finished_at >= ? AND h.ident IS NOT NULL "
+                    f"ORDER BY s.finished_at", chunk + [since]):
+                d = _ident(ident)
+                if d.get("sources") and not d.get("cached_from") and not d.get("rmm_only"):
+                    out[mac] = (ip, d, fin)
+    finally:
+        conn.close()
+    return out
+
+
+def _identify_devices(hosts, scope, interface, enabled=True, managed=None):
+    """Stage 3. Three kinds of host:
+      RMM-managed  -- the RMM's record is the answer: no lookups at all
+      seen lately  -- identified within IDENT_CACHE_HOURS at the same IP:
+                      reuse that (only new web ports get looked at)
+      everyone else -- the full set of lookups (identify.py)."""
     if not hosts:
         return
-    if not enabled:
+    managed = managed or {}
+    quick = []
+    if enabled:
+        # (host / Deep scans always look again)
+        cache = _recent_idents([h["mac"] for h in hosts if h.get("mac")]) if scope == "subnet" else {}
+        full = []
+        for h in hosts:
+            mac = (h.get("mac") or "").upper()
+            if h["ip"] in managed:
+                h["ident"] = identify.identify_host(h, stop=_ALWAYS_STOP)
+                d = managed[h["ip"]].get("device") or {}
+                h["ident"]["rmm_only"] = True
+                if d.get("hostname"):
+                    h["ident"].setdefault("names", {})["rmm"] = d["hostname"]
+                    h["ident"].setdefault("sources", []).append("rmm")
+                    h["ident"]["name"], h["ident"]["name_source"] = d["hostname"], "RMM"
+                quick.append(h)
+            elif mac in cache and cache[mac][0] == h["ip"]:
+                _, old, fin = cache[mac]
+                ident = json.loads(json.dumps(old))
+                ident["cached_from"] = fin
+                web_new = {str(p["port"]) for p in h.get("ports", []) if p.get("state") == "open"
+                           and p["port"] in identify.WEB_PORTS} - set((ident.get("http") or {}).keys()) \
+                    - {str(x) for x in get_no_probe_ports()}
+                for port in sorted(web_new, key=int)[:3]:
+                    r = identify.http_probe(h["ip"], int(port))
+                    if r:
+                        ident.setdefault("http", {})[port] = r
+                        if "http" not in ident.setdefault("sources", []):
+                            ident["sources"].append("http")
+                try:
+                    import passive
+                    passive.merge_into(ident, mac)
+                except Exception:
+                    pass
+                h["ident"] = ident
+                quick.append(h)
+            else:
+                full.append(h)
+    else:
+        full = []
         for h in hosts:   # vendor database + private-MAC check only (no network traffic)
             h["ident"] = identify.identify_host(h, stop=_ALWAYS_STOP)
-            if not h.get("vendor") and h["ident"].get("vendor_db"):
-                h["vendor"] = h["ident"]["vendor_db"]
+            quick.append(h)
+    for h in quick:
+        ident = h.get("ident") or {}
+        if not h.get("vendor") and ident.get("vendor_db"):
+            h["vendor"] = ident["vendor_db"]
+        if not h.get("hostname") and ident.get("name"):
+            h["hostname"] = ident["name"]
+    if not full:
         return
     _progress["stage"] = 3
     _progress["phase"] = "Identifying devices"
@@ -526,7 +615,7 @@ def _identify_devices(hosts, scope, interface, enabled=True):
         _progress["percent"] = round(100.0 * done / max(1, total), 1)
 
     try:
-        identify.identify_hosts(hosts, iface_ip=iface_ip, scope=scope, no_probe=get_no_probe_ports(),
+        identify.identify_hosts(full, iface_ip=iface_ip, scope=scope, no_probe=get_no_probe_ports(),
                                 stop=_stop_requested, progress=prog)
     except Exception:
         traceback.print_exc()
@@ -790,7 +879,23 @@ def _version_cmd(profile, targets, ports, xml_path, privileged):
     return cmd
 
 
-def _identify_services(profile, hosts, privileged, xml_path):
+def _rmm_managed(hosts):
+    """{ip: rmm device} for hosts the RMM already knows (matched by MAC)."""
+    try:
+        import rmm
+        out = {}
+        for h in hosts:
+            if not h.get("mac"):
+                continue
+            m = rmm.match({"mac": h["mac"], "hostname": h.get("hostname")})
+            if m and m.get("status") == "managed" and m.get("by") == "mac":
+                out[h["ip"]] = m
+        return out
+    except Exception:
+        return {}
+
+
+def _identify_services(profile, hosts, privileged, xml_path, skip_ips=()):
     """Runs stage 2 and merges what it learns into `hosts` (stage-1 results,
     modified in place). Every open port ends up with probe = None
     (identified, or nmap tried and had no match), "skipped" (on the
@@ -804,6 +909,9 @@ def _identify_services(profile, hosts, privileged, xml_path):
                 continue
             if pt["port"] in no_probe:
                 pt["probe"] = "skipped"
+                continue
+            if h["ip"] in skip_ips:          # the RMM already knows what this is
+                pt["probe"] = "rmm"
                 continue
             pt["probe"] = "timeout"      # until stage 2 says otherwise
             targets.add(h["ip"])
@@ -912,14 +1020,18 @@ def run_scan(subnet=None, profile=None, scope="subnet", interface=None):
         # Stage 2: identify services on the open ports. Stage-1 results are
         # kept whatever happens here; stopping now saves what's been found.
         stage2 = "ok"
+        # Devices the RMM already manages don't need finding out about: on
+        # network scans they get stage 1 (open ports, for the findings) only.
+        managed = _rmm_managed(hosts) if scope == "subnet" else {}
         if profile != "discovery":
-            stage2 = _identify_services(profile, hosts, mode == "syn", xml_path)
+            stage2 = _identify_services(profile, hosts, mode == "syn", xml_path, skip_ips=managed)
 
         # Stage 3: work out what each device is and what it's called
         # (vendor database, NetBIOS, mDNS, UPnP, router DNS, web page titles).
         # Light, read-only lookups; skipped (bar the vendor database) when
         # identification is switched off or the scan was stopped.
-        _identify_devices(hosts, scope, interface, enabled=get_identify_enabled() and stage2 != "stopped")
+        _identify_devices(hosts, scope, interface, enabled=get_identify_enabled() and stage2 != "stopped",
+                          managed=managed)
         finished = datetime.datetime.now().isoformat()
 
         scan_id = _store_results(subnet, started, finished, hosts, profile, mode, checked, scope)

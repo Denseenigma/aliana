@@ -521,7 +521,7 @@ def classify_host(host):
     # -- names, credited to whichever system learned them
     names = ident.get("names") or {}
     name_src = {"netbios": nb_sys, "mdns": md_sys, "mdns_instance": md_sys, "upnp": up_sys,
-                "dns": "scan", "dhcp": "listen"}
+                "dns": "scan", "dhcp": "listen", "rmm": "fingerprint"}
     named = []
     for k, n in names.items():
         if n and (n, name_src.get(k, "scan")) not in named:

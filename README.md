@@ -315,6 +315,18 @@ auto-scan).
     Queue page and Pi screen); **auto-scan skips it** and leaves a note
   - larger than /16: refused
 
+## Speed: what Aliana skips
+
+- **Devices already in the RMM** (matched by MAC): network scans only check
+  their open ports (for the findings); no service probing, no name lookups --
+  the RMM's name and record are used instead. Their ports show
+  *In RMM · not probed*. A Deep scan of one device still does everything.
+- **Devices identified in the last 6 hours at the same address** reuse that
+  identification; only newly opened web ports get looked at.
+- **LAN timing**: one retry instead of up to ten, and shorter waits, for
+  probes that firewalled devices silently drop (the slowest part of a scan
+  of Windows PCs and phones) -- fewer packets, not more.
+
 ## Two-stage scans (no more hangs on silent devices)
 
 Standard and Deep scans run in two stages:
