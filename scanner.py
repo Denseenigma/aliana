@@ -725,6 +725,82 @@ def _excluded_networks():
     return list(ipaddress.collapse_addresses(nets))
 
 
+# ---------------------------------------------------------------- this Aliana itself
+#
+# The Pi never appears in its own results: its addresses are excluded from
+# every scan, filtered out of what nmap reports, and purged from history
+# (purge_self, at start-up and after imports).
+
+def own_addresses():
+    """({ipv4 of every interface}, {MAC of every interface}) of this Pi."""
+    ips, macs = set(), set()
+    for i in list_interfaces():
+        if i.get("ipv4"):
+            ips.add(i["ipv4"].split("/")[0])
+    try:
+        for name in os.listdir("/sys/class/net"):
+            try:
+                with open(f"/sys/class/net/{name}/address") as f:
+                    m = f.read().strip().upper()
+                if m and m != "00:00:00:00:00:00":
+                    macs.add(m)
+            except OSError:
+                pass
+    except OSError:
+        pass
+    return ips, macs
+
+
+def is_self(ip=None, mac=None, own=None):
+    ips, macs = own or own_addresses()
+    return bool((ip and str(ip) in ips) or (mac and str(mac).upper() in macs))
+
+
+def _drop_self(hosts, own=None):
+    own = own or own_addresses()
+    return [h for h in hosts if not is_self(h.get("ip"), h.get("mac"), own)]
+
+
+def purge_self():
+    """Removes this Pi from stored scans: rows with one of its MACs, or with
+    no MAC and one of its current addresses or its host name (nmap reports
+    the scanning machine without a MAC). Returns how many host rows went."""
+    ips, macs = own_addresses()
+    me = socket.gethostname().split(".")[0].lower()
+    conn = sqlite3.connect(DB_PATH, timeout=10)
+    try:
+        rows = conn.execute("SELECT id, scan_id, ip, mac, hostname FROM hosts").fetchall()
+        gone = [(hid, sid) for hid, sid, ip, mac, hn in rows
+                if (mac and mac.upper() in macs)
+                or (not mac and (ip in ips or (hn and hn.split(".")[0].lower() == me)))]
+        if gone:
+            ids = [g[0] for g in gone]
+            for k in range(0, len(ids), 500):
+                chunk = ids[k:k + 500]
+                q = ",".join("?" * len(chunk))
+                conn.execute(f"DELETE FROM ports WHERE host_id IN ({q})", chunk)
+                conn.execute(f"DELETE FROM hosts WHERE id IN ({q})", chunk)
+            for sid in {g[1] for g in gone}:
+                conn.execute("UPDATE scans SET host_count = (SELECT COUNT(*) FROM hosts WHERE scan_id = ?) WHERE id = ?",
+                             (sid, sid))
+        # host scans aimed at the Pi itself, now empty
+        empty = [r[0] for r in conn.execute("SELECT id, subnet FROM scans WHERE scope = 'host' AND host_count = 0").fetchall()
+                 if r[1] in ips] if gone else []
+        for sid in empty:
+            conn.execute("DELETE FROM scans WHERE id = ?", (sid,))
+        try:
+            for m in macs:
+                conn.execute("DELETE FROM passive_devices WHERE UPPER(mac) = ?", (m,))
+        except sqlite3.Error:
+            pass
+        conn.commit()
+        if gone:
+            print(f"aliana: removed this Pi from {len(gone)} stored scan result(s)", flush=True)
+        return len(gone)
+    finally:
+        conn.close()
+
+
 def is_excluded(ip):
     """The exclusion entry (dict) covering this address, or None."""
     try:
@@ -864,9 +940,9 @@ def _nmap_cmd(profile, subnet, xml_path, privileged, all_ports=False):
     cmd += args
     if privileged:
         cmd += p.get("privileged_args", [])
-    excl = _excluded_networks()
+    excl = [str(n) for n in _excluded_networks()] + sorted(own_addresses()[0])   # + this Pi itself
     if excl:  # never touched: no discovery packets, no port probes
-        cmd += ["--exclude", ",".join(str(n) for n in excl)]
+        cmd += ["--exclude", ",".join(excl)]
     # -v and --stats-every make nmap report progress as it goes (hosts
     # found, ports discovered, % done), which the kiosk screen shows live.
     return cmd + ["-v", "--stats-every", "2s", "-oX", xml_path, subnet]
@@ -1034,6 +1110,10 @@ def run_scan(subnet=None, profile=None, scope="subnet", interface=None, all_port
             _last_scan_status["last_error"] = "No subnet detected to scan."
             _last_scan_status["last_outcome"] = "failed"
             return None
+        if scope == "host" and is_self(subnet):
+            _last_scan_status["last_error"] = f"{subnet} is this Aliana -- not scanned."
+            _last_scan_status["last_outcome"] = "failed"
+            return None
         if scope == "host" and is_excluded(subnet):
             _last_scan_status["last_error"] = f"{subnet} is on the exclusion list (Settings) -- not scanned."
             _last_scan_status["last_outcome"] = "failed"
@@ -1073,7 +1153,7 @@ def run_scan(subnet=None, profile=None, scope="subnet", interface=None, all_port
             _run_nmap_live(_nmap_cmd(profile, subnet, xml_path, False), timeout=timeout)
         _progress["mode"] = mode
 
-        hosts = _parse_nmap_xml(xml_path)
+        hosts = _drop_self(_parse_nmap_xml(xml_path))
         checked = _parse_scaninfo(xml_path)
 
         # Stage 2: identify services on the open ports. Stage-1 results are
@@ -1275,6 +1355,7 @@ def _checked_set(ports_checked):
 
 def _store_results(subnet, started, finished, hosts, profile=None, mode=None, ports_checked=None,
                    scope="subnet"):
+    hosts = _drop_self(hosts)
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute(
@@ -1570,6 +1651,8 @@ def enqueue(kind, target=None, profile=None, source="manual", confirm_large=Fals
         except (ipaddress.AddressValueError, ValueError):
             return None, "Not a valid IPv4 address."
         profile = profile if profile in PROFILES else "deep"
+        if is_self(target):
+            return None, f"{target} is this Aliana -- it never scans itself."
         ex = is_excluded(target)
         if ex:
             return None, (f"{target} is on the exclusion list" +

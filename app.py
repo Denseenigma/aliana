@@ -878,6 +878,10 @@ def api_import():
         for k in ("scans_added", "scans_skipped", "hosts_added", "new_devices"):
             total[k] += r[k]
         total["errors"] += [f"{name}: {e}" for e in r["errors"]]
+    try:
+        scanner.purge_self()          # an export from this Pi may include the Pi itself
+    except Exception as e:
+        print("aliana: couldn't remove this Pi from imported results:", e, flush=True)
     insights._summary_cache.clear()
     return jsonify({"ok": not total["errors"] or total["scans_added"] > 0, **total})
 
@@ -1475,6 +1479,17 @@ if __name__ == "__main__":
     scanner.on_job_done.append(deep_unknowns_auto)
     passive.init_db()
     labels.init_db()
+
+    def _purge_self_soon():
+        # now, and again once the network is up (no address yet at boot)
+        for delay in (0, 90):
+            time.sleep(delay)
+            try:
+                if scanner.purge_self():
+                    insights._summary_cache.clear()
+            except Exception as e:
+                print("aliana: couldn't remove this Pi from history:", e, flush=True)
+    threading.Thread(target=_purge_self_soon, name="aliana-purge-self", daemon=True).start()
     if passive.enabled():
         passive.start()   # listens only; needs CAP_NET_RAW (setup.sh)
     # The queue worker runs every scan, one at a time; the auto-scan loop

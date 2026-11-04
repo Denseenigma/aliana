@@ -328,6 +328,12 @@ auto-scan).
   Deep scans of an excluded host are refused, and queued ones are cancelled
   when the host is excluded. Host cards have an **Exclude** button (click
   twice); excluded hosts show an "Excluded" tag instead of scan buttons.
+- **The Pi itself** never shows up: its own addresses are always added to
+  `--exclude`, filtered from nmap's results, and refused as Deep-scan
+  targets. At start-up (and after an import) any older results for the Pi
+  are removed from history, reports and exports -- matched by its MACs, or
+  by its current address / host name for the MAC-less entry nmap gives the
+  scanning machine.
 - **Subnet size guard** -- the subnet on the selected interface is checked
   before a network scan is queued:
   - /24 or smaller: scans freely
