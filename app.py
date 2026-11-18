@@ -404,6 +404,28 @@ def _erase_everything_sensitive():
     labels.forget_all()
 
 
+@app.route("/api/data/clear", methods=["POST"])
+def api_data_clear():
+    """Settings > Clear data: wipe scan history and discovery, keep sign-in,
+    settings and the RMM integration. Needs a fresh code + typed CLEAR."""
+    data = request.get_json(silent=True) or {}
+    if (data.get("confirm") or "").strip().upper() != "CLEAR":
+        return _auth_error("Type CLEAR to confirm.")
+    try:
+        auth.verify_current(data.get("code") or "", request.remote_addr)
+    except auth.AuthError as e:
+        return _auth_error(e, 401)
+    scanner.cancel_all_queued()
+    scanner.stop_scan(wait=10)
+    passive.forget_all()     # first, so the listener can't write it back
+    auth.clear_dataset(scanner.DB_PATH)
+    labels.forget_all()
+    insights._summary_cache.clear()
+    if data.get("exclusions"):
+        scanner.set_exclusions([])
+    return jsonify({"ok": True})
+
+
 @app.route("/api/auth/status")
 def api_auth_status():
     return jsonify({"ok": True, **auth.status()})

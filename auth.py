@@ -427,6 +427,34 @@ def erase_sensitive(db_path, vault_key_path):
         _log("ERASED sensitive data and removed the authenticator (lost-access reset)")
 
 
+DATASET_TABLES = ("ports", "hosts", "scans", "jobs", "passive_devices", "passive_network", "device_labels")
+
+
+def clear_dataset(db_path):
+    """Settings > Clear data: start fresh at a new site.
+
+    Erased: all scans / hosts / ports / jobs, everything heard by passive
+            discovery, and your device labels.
+    Kept:   the authenticator and sign-in, all settings, and the whole RMM
+            integration (provider, credentials, vault key, synced device list)."""
+    with _lock:
+        if not os.path.exists(db_path):
+            return
+        conn = sqlite3.connect(db_path)
+        try:
+            tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            cleared = [t for t in DATASET_TABLES if t in tables]
+            for t in cleared:
+                conn.execute(f"DELETE FROM {t}")
+            if "sqlite_sequence" in tables and cleared:
+                conn.execute(f"DELETE FROM sqlite_sequence WHERE name IN ({','.join('?' * len(cleared))})", cleared)
+            conn.commit()
+            conn.execute("VACUUM")    # don't leave the old rows in free pages
+        finally:
+            conn.close()
+        _log("cleared the dataset (scans, hosts, passive discovery, labels); RMM and settings kept")
+
+
 def _shred(path):
     try:
         size = os.path.getsize(path)

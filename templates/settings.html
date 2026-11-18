@@ -456,6 +456,21 @@
     </div>
   </section>
 
+  <section class="panel">
+    <div class="panel-head"><h2>Clear data</h2></div>
+    <p class="desc">Start fresh before a new site. Permanently erases <b>all scans, hosts, ports and the job queue</b>,
+      everything heard by <b>passive discovery</b>, and your <b>device labels</b>.
+      Keeps your sign-in, all settings and the whole <b>RMM integration</b> (connection, credentials and synced device list).</p>
+    <label class="hint" style="display:flex;align-items:center;gap:8px;margin:8px 0">
+      <input type="checkbox" id="clr-ex"> Also clear the exclusion list</label>
+    <div class="add" style="margin-top:6px">
+      <input id="clr-code" inputmode="numeric" autocomplete="one-time-code" maxlength="7" placeholder="Current code" style="width:130px">
+      <input id="clr-confirm" placeholder="Type CLEAR" autocomplete="off" spellcheck="false" maxlength="5" style="width:110px">
+      <button type="button" class="red sm" id="clr-go">Clear data</button>
+    </div>
+    <div class="hint" id="clr-msg"></div>
+  </section>
+
   <section class="panel rmm-panel">
     <div class="panel-head"><h2>RMM integration</h2><span class="kv" id="rmm-kv"></span></div>
     <p class="desc">Checks whether scanned devices are managed by your RMM: Aliana pulls the RMM's device list
@@ -923,6 +938,23 @@
       });
     });
     loadAuth();
+  })();
+  // ---------- clear data
+  (function () {
+    function cmsg(t, bad) { $("clr-msg").textContent = t || ""; $("clr-msg").style.color = bad ? "var(--red)" : ""; }
+    $("clr-go").addEventListener("click", function () {
+      var b = this, code = $("clr-code").value.replace(/\D/g, "");
+      if (code.length !== 6) { cmsg("Enter the current 6-digit code from your authenticator first.", true); $("clr-code").focus(); return; }
+      if ($("clr-confirm").value.trim().toUpperCase() !== "CLEAR") { cmsg("Type CLEAR to confirm.", true); $("clr-confirm").focus(); return; }
+      b.disabled = true; cmsg("Clearing…");
+      post("/api/data/clear", { code: code, confirm: "CLEAR", exclusions: $("clr-ex").checked }).then(function (d) {
+        b.disabled = false; $("clr-code").value = "";
+        if (!d.ok) { cmsg(d.error, true); return; }
+        $("clr-confirm").value = ""; $("clr-ex").checked = false;
+        cmsg("Cleared. Scan history and discovery are empty; RMM and settings were kept.");
+        load();
+      }, function () { b.disabled = false; cmsg("Couldn't reach Aliana.", true); });
+    });
   })();
   load();
 })();

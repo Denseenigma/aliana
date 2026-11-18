@@ -510,6 +510,12 @@ setting up a new authenticator. Scan settings, exclusions, never-probe ports
 and Wi-Fi networks are kept so the Pi stays reachable. Over SSH, the same
 thing: `./venv/bin/python3 auth.py --reset`, then restart the service.
 
+**Starting fresh at a new site:** Settings > **Clear data**. Enter a current
+code and type CLEAR. This erases all scans, hosts, ports, the queue, passive
+discovery and device labels, and (if ticked) the exclusion list. Your sign-in,
+settings and the whole RMM integration (connection, credentials, synced device
+list) are kept.
+
 The authenticator secret, recovery-code hashes and the session-signing key
 live in `~/.config/aliana/` (owner-only, outside the repo). Codes are
 single-use, and wrong guesses are rate-limited per address.
